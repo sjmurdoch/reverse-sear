@@ -1010,6 +1010,26 @@ let alarmFired = false;
 // that is already overdue should show its state, not shout at you.
 let armed = false;
 function render() {
+  // With more than one in the oven the readouts below are about one of them, so
+  // say which; unlabelled numbers next to three steaks are worse than no numbers.
+  const who = state.steaks.length > 1 && cur() ? cur().name : null;
+  const secTitle = $("readingsTitle");
+  if (secTitle) {
+    const want = who ? `Readings — ${who}` : "Readings";
+    if (secTitle.textContent !== want) secTitle.textContent = want;
+  }
+  const nowLabel = document.querySelector('#statsRow .stat dt');
+  if (nowLabel) {
+    const want = who ? `${who} now` : "Core now";
+    if (nowLabel.textContent !== want) nowLabel.textContent = want;
+  }
+  // One press puts them all in, because that is the physical action.
+  const sb = $("startBtn");
+  if (sb) {
+    const want = state.steaks.length > 1 ? "All in the oven" : "Start cook";
+    if (sb.textContent !== want) sb.textContent = want;
+  }
+
   // These belong to every state, including the ones that return early below.
   renderSteakList();
   renderExtraSteaks();
@@ -1317,7 +1337,7 @@ function renderSteakList() {
       const live = pcts(f.samples.map(th => modelTemp(th, localMin(s))), [0.5])[0];
       temp = live.toFixed(1) + '<span class="unit"> °C</span>';
       const ready = t && Number.isFinite(t.pullAt) ? "out " + fmtWallClock(t.pullAt) : "";
-      when = [ready, nth].filter(Boolean).join(" · ") + ` · target ${s.targetC}`;
+      when = [ready, nth].filter(Boolean).join(" · ");
       const ord2 = opening && opening.orders.find(o => o.id === s.id);
       const due = opening && Date.now() >= opening.openAt;
       if (live >= s.targetC - 0.15) { pill = "take out"; cls = "act"; }

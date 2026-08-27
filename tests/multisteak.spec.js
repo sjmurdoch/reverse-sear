@@ -85,6 +85,7 @@ test.describe('three steaks, one oven', () => {
     await app.seedMany(DINNER);
     const rows = await app.rows2();
     expect(rows.map(r => r.name)).toEqual(['Ribeye', 'Sirloin', 'Fillet']);
+    for (const r of rows) expect(r.when.length, 'the row must stay on one line').toBeLessThan(26);
     const ordinals = rows.map(r => (r.when.match(/(1st|2nd|3rd) out/) || [])[1]);
     expect(new Set(ordinals.filter(Boolean)).size).toBe(3);
     for (const r of rows) expect(r.when).toMatch(/out \d{1,2}:\d{2}/);
@@ -132,6 +133,17 @@ test.describe('three steaks, one oven', () => {
     await expect(app.page.locator('#addBtn')).toHaveText(/three is the most/i);
   });
 
+  test('the readouts say which steak they are about', async ({ app }) => {
+    // Unlabelled numbers next to three steaks are worse than no numbers.
+    await app.seedMany(DINNER);
+    expect(await app.page.textContent('#readingsTitle')).toMatch(/Readings — Ribeye/);
+    expect(await app.page.textContent('#statsRow .stat dt')).toMatch(/Ribeye now/);
+    await app.page.click('#steakList .srow:nth-child(2)');
+    await app.settle();
+    expect(await app.page.textContent('#readingsTitle')).toMatch(/Readings — Sirloin/);
+    expect(await app.page.textContent('#statsRow .stat dt')).toMatch(/Sirloin now/);
+  });
+
   test('one press puts all three in at once', async ({ app }) => {
     await app.page.click('#addBtn');
     await app.page.click('#addBtn');
@@ -140,6 +152,7 @@ test.describe('three steaks, one oven', () => {
     await app.page.fill('#startTemp', '5');
     await app.page.fill(`input[data-f="startTemp"][data-s="${ids[1]}"]`, '12');
     await app.page.fill(`input[data-f="startTemp"][data-s="${ids[2]}"]`, '7');
+    await expect(app.page.locator('#startBtn')).toHaveText(/all in the oven/i);
     await app.page.click('#startBtn');
     await app.settle();
     const s = await app.state();
