@@ -85,6 +85,57 @@ class App {
     await this.settle();
   }
 
+  /**
+   * Several steaks in one oven, all in at the same time. Each entry is
+   * { readings: [[t, °C]], name, targetC, thickMm, massKg }.
+   */
+  async seedMany(list, { elapsed = null } = {}) {
+    await this.page.evaluate(({ list, elapsed }) => {
+      const spent = elapsed == null
+        ? Math.max(...list.map(d => d.readings[d.readings.length - 1][0])) : elapsed;
+      const at = Date.now() - spent * 60000;
+      state.steaks = list.map((d, i) => Object.assign(newSteak(i + 1), {
+        id: 'seed' + (i + 1),
+        name: d.name || 'Steak ' + (i + 1),
+        targetC: d.targetC == null ? 44 : d.targetC,
+        thickMm: d.thickMm == null ? 40 : d.thickMm,
+        massKg: d.massKg == null ? 1.0 : d.massKg,
+        startedAt: at,
+        readings: d.readings.map(([t, temp]) => ({ t, temp })),
+      }));
+      state.current = state.steaks[0].id;
+      recompute(); rescheduleCheck(); save(); render();
+    }, { list, elapsed });
+    await this.settle();
+  }
+
+  /** What each steak's glance row says. */
+  rows2() {
+    return this.page.$$eval('#steakList .srow', els => els.map(el => ({
+      name: el.querySelector('.nm').textContent.trim(),
+      temp: el.querySelector('.t').textContent.trim(),
+      pill: el.querySelector('.spill').textContent.trim(),
+      when: el.querySelector('.when').textContent.trim(),
+    })));
+  }
+
+  dockLabel() { return this.page.textContent('#readLabel'); }
+
+  /** The shared trip: when the door opens, and what each steak wants then. */
+  trip() {
+    return this.page.evaluate(() => {
+      const o = nextOpening();
+      if (!o) return null;
+      return {
+        openInMin: (o.openAt - Date.now()) / 60000,
+        kinds: o.orders.map(x => x.kind),
+        dueAts: state.steaks.map(s => s.dueAt),
+        pullOrder: o.orders.slice().sort((a, b) => a.pullAt - b.pullAt)
+          .map(x => (state.steaks.find(s => s.id === x.id) || {}).name),
+      };
+    });
+  }
+
   /** Everything the card is currently telling the cook. */
   read() {
     return this.page.evaluate(() => ({

@@ -33,6 +33,34 @@ can fail the deploy** — that is deliberate. `tests/README.md` describes the
 suite; the Playwright config rebuilds and serves the page itself, so tests never
 run against a stale build.
 
+## Several steaks, one oven
+
+The app tracks up to `MAX_STEAKS` (3). They go in **together**, on separate
+shelves, with their own sizes, starting temperatures and targets.
+
+`state` is the oven and holds `steaks[]`; the per-steak fields (`readings`,
+`startedAt`, `dueAt`, `targetC`, …) are **accessors onto the current steak**, so
+every rule written when there was only one steak still applies unchanged. There
+is always at least one steak (`ensureSteak()`) — with an empty list the accessors
+become silent no-ops and the single-steak paths quietly stop working.
+
+Opening the door costs heat for everything inside, so the unit of interaction is
+the **trip to the oven**, not the check. Each steak keeps its own sticky
+appointment; `nextOpening()` opens the door at the earliest of them and probes
+everything while it is open. That can only move a check *earlier* than a steak
+asked for, so each keeps its own 5% overshoot guarantee while the number of trips
+falls (`model/fit.py:advise_batch` is the reference; `validate.compare_schedules`
+measures it at ~20% fewer openings and better accuracy than one steak per trip).
+
+**`rescheduleCheck(only)` must not reschedule every steak.** An appointment
+belongs to one steak and is reset only by that steak's own reading. Rescheduling
+all of them when one was probed pushed the others' checks into the future, ended
+the sweep after the first number, and left two steaks unlogged.
+
+**`render()` returns early in several states.** Anything that must paint in all
+of them — the glance list, the per-steak setup blocks, the dock's pass label —
+has to run *before* those returns, at the top of `render()`.
+
 ## Architecture
 
 ### The model is implemented twice, on purpose

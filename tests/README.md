@@ -34,6 +34,7 @@ regression shows up as one project failing and not the other.
 | `schedule.spec.js` | the appointment. Chiefly the regression test below, plus what resets it, that it survives a reload, and every message the card gives: countdown format, due, late, escalation, coast, stall, and whether the app can actually wake you. |
 | `lifecycle.spec.js` | closing and reopening: resume, the six-hour stale guard, finishing and its record, starting another, and that the app still works when `localStorage` throws. |
 | `presentation.spec.js` | the phone: no sideways overflow in any state, the dock not covering content, touch-target sizes, the iOS number pad, both themes resolving correctly including the un-stamped "system" case, and that no colour token is defined only inside a media query. |
+| `multisteak.spec.js` | three steaks in one oven: one countdown rather than three, the door opening when the most urgent steak needs it, the safety property that no steak is checked later than it asked, the guided sweep ("Sirloin — 2 of 3") landing each number on the right steak, one steak's reading not cancelling the others' appointments, the running order, pulling one while the rest carry on, per-steak targets, the three-steak limit, and one press starting them all. |
 | `parity.spec.js` | that the JavaScript port has not drifted from `model/fit.py`. |
 | `model/test_model.py` | the Python side: psychrometrics, the ground-truth simulator's physics, the time-constant prior, the fitter, the scheduling rule, and a small end-to-end accuracy check. |
 
