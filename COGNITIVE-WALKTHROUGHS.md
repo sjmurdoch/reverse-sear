@@ -620,9 +620,13 @@ passes either way. The single-steak wording of the query and of the finished
 card is held by the existing tests in `cook.spec.js` and `lifecycle.spec.js`,
 which still pass unchanged.
 
-**Which browser.** WebKit is the primary target and is what CI gates on, but the
-Playwright CDN is blocked from this sandbox, so this walkthrough and its tests
-were run under the `iphone-chromium` fallback project only. The three defects in
-this family that WebKit has historically caught and Chromium has not — elements
-rebuilt under a finger — were not re-examined here; their existing tests still
-pass, but under Chromium.
+**Which browser.** The walkthrough itself was driven under the
+`iphone-chromium` fallback project only: WebKit is the primary target, but the
+Playwright CDN is blocked from the sandbox it was done in, so the three defects
+in this family that WebKit has historically caught and Chromium has not —
+elements rebuilt under a finger — could not be re-examined while the fixes were
+being made. CI then ran the whole suite under WebKit on the commit that carries
+them: 100 passed, `iphone-webkit`, [run 15][wk]. So the coverage claim above
+holds on Safari's engine; it just was not what caught anything here.
+
+[wk]: https://github.com/sjmurdoch/reverse-sear/actions/runs/33123992895
