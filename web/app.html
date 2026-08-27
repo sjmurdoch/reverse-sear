@@ -232,6 +232,14 @@
   .dock .field { flex: 1; }
   .dock button.primary { flex: 0 0 auto; }
   .hidden { display: none !important; }
+
+  .stamp {
+    text-align: center; padding: 2px 0 4px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+    color: var(--ink-3);
+  }
+  .stamp a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
+  .stamp a:hover, .stamp a:focus-visible { color: var(--ink-2); }
 </style>
 
 <div class="wrap">
@@ -344,6 +352,8 @@
       most of the dead time.</p>
     </div>
   </details>
+
+  <footer class="stamp"><!--BUILD-->development build<!--/BUILD--></footer>
 </div>
 
 <div class="dock hidden" id="dock">
@@ -571,6 +581,7 @@ function advise(samples, nowMin, target) {
  * State
  * ------------------------------------------------------------------ */
 const STORE = "reverse-sear-pilot-v1";
+const STALE_HOURS = 6;   // a saved cook older than this is almost certainly finished
 const $ = id => document.getElementById(id);
 
 let state = {
@@ -592,6 +603,9 @@ function save() {
 
 function cfg() {
   return { ovenC: state.ovenC, targetC: state.targetC, massKg: state.massKg, thickMm: state.thickMm, fan: state.fan };
+}
+function isStale() {
+  return !!state.startedAt && (Date.now() - state.startedAt) > STALE_HOURS * 3600e3;
 }
 function nowMin() {
   return state.startedAt ? (Date.now() - state.startedAt) / 60000 : 0;
@@ -620,6 +634,9 @@ function fmtWall(minsFromStart) {
 }
 
 let alarmFired = false;
+// Suppress the alarm on the very first render after a reload: a restored cook
+// that is already overdue should show its state, not shout at you.
+let armed = false;
 function render() {
   const v = $("verdict");
   const started = !!state.startedAt;
@@ -634,6 +651,19 @@ function render() {
     `Before any reading: expected time constant <strong>${priors.tauMedian.toFixed(0)} min</strong>, ` +
     `effective asymptote around <strong>${priors.tInfMean.toFixed(0)} °C</strong> once the surface has dried. ` +
     `Both get corrected by your first two readings.`;
+
+  if (started && isStale()) {
+    v.className = "card verdict is-stall";
+    $("verdictLabel").textContent = "Earlier cook still open";
+    $("verdictClock").textContent = "—";
+    $("verdictClock").className = "clock small";
+    $("verdictAt").textContent = "started " + new Date(state.startedAt).toLocaleString([], {
+      weekday: "short", hour: "2-digit", minute: "2-digit" });
+    $("verdictWhy").textContent = "This one is long finished. Reset in Setup to start a new steak — or carry on if you really are still cooking.";
+    drawChart();
+    renderLog();
+    return;
+  }
 
   if (!started || !plan) {
     v.className = "card verdict";
@@ -676,7 +706,8 @@ function render() {
     "  ·  " + plan.next.toFixed(0) + " min in";
   $("verdictWhy").textContent = plan.why;
 
-  if (due && !alarmFired) { alarmFired = true; beep(); }
+  if (due && !alarmFired && armed) { alarmFired = true; beep(); }
+  armed = true;
   if (!due) alarmFired = false;
 
   const [nLo, nMid, nHi] = plan.tempNow;
@@ -908,7 +939,7 @@ $("targetC").value = state.targetC;
 $("massKg").value = state.massKg;
 $("thickMm").value = state.thickMm;
 [...$("fanToggle").children].forEach(c => c.setAttribute("aria-pressed", String((c.dataset.fan === "1") === !!state.fan)));
-if (state.startedAt) $("setup").open = false;
+if (state.startedAt) $("setup").open = isStale();
 recompute();
 render();
 

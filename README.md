@@ -3,7 +3,10 @@
 Cook a steak to a precise core temperature in a low oven while opening the door
 as few times as possible.
 
-The tool is a single self-contained web page (`web/index.html`) that runs in
+**Live at <https://sjmurdoch.github.io/reverse-sear/>** — open it in Safari and
+"Add to Home Screen".
+
+The tool is a single self-contained web page that runs in
 Safari on an iPhone: enter the oven temperature and the steak, log the core
 temperature each time you probe it, and it tells you when to next open the oven
 — and eventually tells you to stop opening it and take the steak out at a
@@ -194,7 +197,7 @@ timer for it.
 
 ## Using it
 
-Open `web/index.html` on the phone (or the published Artifact link), then:
+Open <https://sjmurdoch.github.io/reverse-sear/> on the phone, then:
 
 1. **Setup** — oven temperature, target, mass, thickness, fan or conventional.
 2. Probe the steak, enter that number as the starting core, hit **Start cook**
@@ -203,6 +206,12 @@ Open `web/index.html` on the phone (or the published Artifact link), then:
    straight back, and log the reading. Refits and reschedules instantly.
 4. Eventually it says **coast** and gives you a pull time. Don't open the oven
    again; take it out then.
+
+Everything is kept in `localStorage`, so closing Safari, locking the phone or
+switching apps loses nothing — reopen the page and the cook picks up exactly
+where it was, with the countdown recalculated from the real elapsed time. A
+saved cook more than six hours old is flagged as finished rather than silently
+resumed. **Reset everything** in Setup clears it for the next steak.
 
 Things that keep the model honest:
 
@@ -213,6 +222,22 @@ Things that keep the model honest:
   temperatures a hard sear on a 1 kg steak typically adds a couple of degrees
   at the core. If you want 44 °C after searing, aim lower here.
 
+## Deployment
+
+`.github/workflows/pages.yml` publishes the site with GitHub Actions (the
+`configure-pages` / `upload-pages-artifact` / `deploy-pages` flow, not a
+`gh-pages` branch) on every push to `main`, and on demand via
+**Actions → Publish to GitHub Pages → Run workflow**. The workflow enables Pages
+itself on its first run; if the repository's Pages source has been set by hand,
+it needs to be **Settings → Pages → Source: GitHub Actions**.
+
+Each run smoke-tests the model before it builds — a bad prior or a scheduling
+rule that stops asking for readings fails the deploy rather than shipping.
+
+The page carries a discreet footer stamping the commit it was built from and
+that commit's timestamp, linked to the commit on GitHub, so what is live is
+always identifiable.
+
 ## Running the modelling code
 
 ```bash
@@ -222,9 +247,14 @@ python3 model/steak.py         # ground-truth simulator, one default cook
 python3 model/fit.py           # priors and a no-data prediction
 python3 model/validate.py 40   # closed-loop validation over 40 random cooks
 
-python3 web/build.py           # regenerate web/index.html from web/app.html
+python3 web/build.py                        # -> web/index.html
+python3 web/build.py --out _site/index.html # what CI does
 ```
 
 `web/app.html` is the source of truth for the page (body content only, so it
-can be published directly as a Claude Artifact); `web/build.py` wraps it in an
-HTML shell to produce the standalone `web/index.html`.
+can also be published directly as a Claude Artifact); `web/build.py` wraps it in
+an HTML shell and stamps the build footer to produce `web/index.html`.
+
+`web/index.html` is committed so the page can be opened straight from a clone,
+but the deployed copy is always rebuilt by CI — rerun `web/build.py` after
+editing `web/app.html`.
