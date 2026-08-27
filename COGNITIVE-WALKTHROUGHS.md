@@ -379,3 +379,250 @@ goes and surviving a reload, the same guard on the starting temperature, the wid
 and narrow forms of the headline estimate, and the first-check wording appearing
 and then going away.
 
+
+---
+
+## Walkthrough 4 — three steaks, one oven
+
+**Persona.** The same cook as walkthrough 1, now feeding four people. Three
+steaks go in together on separate shelves: a 1.1 kg ribeye at 48 mm for the
+table, a 0.4 kg sirloin at 28 mm for someone who wants it at 52 °C, and a
+0.6 kg fillet at 38 mm. Still a sauce, still potatoes, still wet hands and four
+seconds of attention. The phone goes face-down on the counter and the cook walks
+away, trusting it to shout.
+
+**Scenario.** All three in at once, three checks apart, one trip to the oven per
+check. The dinner runs from setup to the last steak out, and then straight into
+the next one, because a cook who does this once does it again the same evening.
+
+**How it was walked.** The three-steak state was seeded into the running page in
+a headless iPhone context against a controllable clock, then driven the way the
+cook would drive it: wait for the countdown, open the door once, sweep through
+all three, and act on whatever the card said next. Every stage was checked
+against the four questions, and every claim below was reproduced in the browser
+before it was fixed.
+
+**Task stages walked.** Set up three → all in together → wait → the trip: probe
+all three → correct a number that was wrong at setup → one comes out while the
+rest carry on → the last one out → start another dinner. Then the two things
+this cook does that the single-steak app never had to survive: tapping a steak
+to look at it, and adding another one to a cook already running.
+
+**What held.** The batching itself. One countdown, the door opening at the
+earliest appointment any steak held, everything probed while it was open, the
+guided sweep landing each number on the steak it came from, and the running
+order in the list — all behaved as walkthrough-era single-steak rules say they
+should. Every defect below is the same shape instead: the per-steak fields are
+accessors onto the *selected* steak, and six things that belong to the whole
+oven — the alarm, the end of a cook, the start of one, the implausible-reading
+query, the appointments and the Setup form — were quietly reading or writing
+through them.
+
+### 1. The card said "Open the oven now" and the phone stayed silent
+
+**Stage:** waiting, having walked away. **Question failed:** 4 — and it breaks
+the one promise the tool makes to a cook who is not looking at it.
+
+The countdown on the card is the *trip*: the earliest appointment any steak
+holds. The beep was fired from `state.dueAt`, which is the appointment of
+whichever steak the readouts happen to be showing. Those are not the same
+moment, and the gap is as large as the spread of the three appointments:
+
+```
+28.0 min elapsed   trip opens in 9.6 min  (the sirloin is driving)
+                   the selected ribeye's own check is 13.3 min away
+37.6 min           card: "Open the oven now"      phone: silent
+41.3 min           card: "Open the oven now"      phone: beeps — 3.7 min late
+```
+
+Nothing on screen suggested a problem, because the card was correct. Only the
+alarm was wrong, and only for the cook who is not in the room to see it.
+
+**Change.** `alarmAt()` returns what the card is counting down to: the trip when
+several steaks are in, and the steak's own appointment when only one is.
+`render()` rings from that. The single-steak path is unchanged — with one steak
+in the oven, the trip *is* its appointment.
+
+### 2. "Start another steak" left two steaks stranded, and the next dinner could not be started
+
+**Stage:** after the last one comes out. **Question failed:** 4, then 2 — the
+action reported success and left the app in a state with no way forward.
+
+`startAnother()` cleared `state.startedAt`, `state.readings` and the rest, all of
+which are accessors onto the current steak. So it cleared one steak of the three.
+The other two kept `finishedAt`, stayed in the list marked **out** with the last
+dinner's temperatures, and — because a steak that has started shows no
+starting-temperature box — offered nowhere to type the number needed to start
+them again. Pressing the start button then refused with *"Sirloin: type the core
+temperature the probe is showing"*, naming a box that was not on the screen.
+
+That is a dead end reached by pressing the only button the app offers, at the
+end of every multi-steak cook.
+
+**Change.** "Another" means another dinner, not another steak: `startAnother()`
+clears the cook on every steak in the oven and keeps their names and sizes, so
+the same three are ready to go in again. The button says **Start another cook**
+when there is more than one steak, which is what it now does.
+
+### 3. A steak added to a running cook could never be put in
+
+**Stage:** the trip, when someone else turns up. **Question failed:** 2 and 3 —
+and the action the cook would reach for was destructive.
+
+**Add another steak** is offered while a cook is running, and adding one worked:
+a new block appeared with its own starting-temperature box. There was then no
+action that put it in the oven. The start button starts *every* steak, so
+pressing it re-zeroed the clock of the steaks already cooking and threw away
+their readings. Added to a running single-steak cook, observed:
+
+```
+before   Ribeye  started 28.0 min ago,  readings [0, 16, 28 min]
+press "All in the oven"
+after    Ribeye  started 0.0 min ago,   readings [{t: 0, temp: 5}]
+         no warning, no confirmation — the 5 °C is the stale value left in the box
+```
+
+A whole dinner's worth of information, from a button whose label was "All in the
+oven". With three in it did not even do that: it refused, naming a box that had
+been hidden because that steak was already cooking.
+
+**Change.** The button puts in what is not already in the oven, and says so:
+**"Steak 3 into the oven"** when a cook is running, **"All in the oven"** when
+none is, and it is disabled with "Everything is in the oven" when there is
+nothing to put in. A steak going in late gets its own clock zero — the per-steak
+`startedAt` the app already carries everywhere else, including the chart — and
+the steaks already cooking keep their readings, their zero and their
+appointments. The card stays with the cook in progress rather than jumping to
+the newcomer.
+
+### 4. The mistype query disappeared as the sweep moved on
+
+**Stage:** logging, during the sweep. **Question failed:** 1 — walkthrough 3
+added this protection, and the sweep took it away again.
+
+A trip is one sweep: log the ribeye and the dock immediately moves to the
+sirloin, which is exactly what a chef with wet hands needs. But the query
+raised by an implausible reading was computed from `state.readings` — the
+*selected* steak — so it existed for the tick between the reading landing and
+the selection moving on, and was never seen. Typing `4.3` for `43` on the ribeye,
+the defect walkthrough 3 exists to catch, produced no query at all.
+
+**Change.** The query is asked of every steak in the oven, and names the one it
+doubts, since the readings table below shows only the selected steak:
+**"Ribeye: 4.3 °C is 21.7 °C below its last reading of 26 °C … tap Ribeye in the
+list and delete the row in Readings."** With one steak in, the wording is
+unchanged.
+
+### 5. Correcting one steak walked every other steak's check forward
+
+**Stage:** correcting a setup number mid-cook. **Question failed:** 4, and it is
+walkthrough 1's defect arriving through a door that did not exist then.
+
+`rescheduleCheck()` re-makes an appointment from `advise()`, which floors its
+next check at `now + MIN_GAP_MIN`. Every per-steak edit called it for *all*
+steaks, so correcting the fillet's thickness a minute before the trip — 38 mm
+typed at setup where 35 mm was meant — moved the other two:
+
+```
+before   ribeye 4.7 min   sirloin 1.0 min   fillet 1.0 min
+after    ribeye 8.0 min   sirloin 5.0 min   fillet 5.0 min
+```
+
+The sirloin was a minute from the check it had promised; the correction pushed it
+to five, and each further keystroke pushed it again. The same unscoped call sat
+in three more places: removing a steak from the list, adding one, and taking one
+*out* of the oven — so pulling the sirloin pushed the ribeye's outstanding check
+out to `now + 5` as well.
+
+**Change.** `rescheduleCheck(only)` now takes the steak, or the several steaks
+that just went in together, and every caller says which. A steak's own fields
+re-plan that steak; adding, removing or pulling a steak re-plans nothing, because
+the others learned nothing from it. The unscoped call is kept for exactly the
+two things that really are shared — the oven's temperature and its fan — where
+every steak's fit does change.
+
+### 6. The Setup fields silently followed whichever steak was tapped
+
+**Stage:** looking at one steak, then correcting another. **Question failed:** 3
+— the action does something other than what its position says.
+
+Tapping a row in the list points the readouts at that steak, which is the point
+of the list. It also pointed **Target °C**, **Mass kg** and **Thickness mm** at
+it, because those write through the same accessors — while still showing the
+first steak's numbers, and while that steak's own block, further down, showed
+its numbers too. Correcting the ribeye's thickness after glancing at the sirloin
+put 52 mm on the sirloin, in a field that had just displayed 48.
+
+**Change.** The panel now reads as *the oven, then one block per steak*. Oven
+temperature and fan sit together at the top; the first steak's target, thickness,
+mass and starting temperature sit in its own block, built like the blocks for
+steaks 2 and 3 — with a colour dot and an editable name once there is more than
+one. Those fields are written to the first steak explicitly, never through the
+selection.
+
+### 7. Smaller things
+
+- **The finished card put one steak's temperature under an unattributed
+  heading.** "Out of the oven · 50.0 °C" after a three-steak dinner reads as the
+  verdict on the dinner. It now names the steak whose number it is showing.
+- **"Probe all 3 while the door is open" was ordered even when one was
+  coasting**, contradicting that steak's own row in the list a few pixels below.
+  The line now counts only the steaks whose plan is still `measure`, and says
+  the others are coasting and go straight back.
+- **The collapsed Setup summary described one steak** as though it were the
+  cook: "125°C · target 44°C · 40mm" with three different steaks inside. With
+  several in, it says how many.
+- **The prior note said "Before any reading…"** with no clue which steak it was
+  the prior *for*. It names the steak when there is more than one.
+- **The instruction under the button named a button that was not there.**
+  "…press **Start cook** as the steak goes into the oven" sat under a button
+  reading "All in the oven". It now quotes whatever the button actually says,
+  and the note explaining what Target means sits below every steak's block
+  rather than between the first and the second.
+
+### Deliberately not changed
+
+- **Editing the oven temperature still re-makes every appointment.** It walks
+  each check forward to `now + MIN_GAP_MIN`, exactly as finding 5 complains
+  about — but the oven is genuinely shared, so every steak's fit really has
+  changed and every old appointment really is stale. This is walkthrough 1's
+  documented "a setup value edited" rule, applied to the one value that belongs
+  to all of them.
+- **No per-steak alarm.** One trip is one alarm. Ringing again for each steak in
+  the sweep would turn the guided sweep into a queue of interruptions, and the
+  door is already open by then.
+- **No fourth steak.** Three still fit on a phone screen at a glance; a fourth
+  row would push the countdown off it, which is the number this persona reads
+  first.
+- **A steak added mid-cook is still not batched into a shared prior.** It gets
+  its own clock and its own fit. The oven is hotter for a moment when the door
+  opens to put it in, and the model does not know that — but neither does it know
+  about the door opening for a probe, which is the same size of error and has
+  been acceptable since walkthrough 1.
+- **Tapping a steak still changes the readouts, the chart band and the dock.**
+  Finding 6 is not an argument against the selection; it is an argument that the
+  Setup fields were never part of it.
+
+### Verification
+
+Eight regression tests in `tests/multisteak.spec.js`, under
+`the oven as a whole, not the steak on screen`: the alarm ringing at the trip
+rather than at the selected steak's appointment; the query surviving the sweep
+and naming its steak; a per-steak correction leaving the other appointments
+alone; the oven temperature still re-making all of them; a pull leaving the rest
+alone; the Setup fields staying the first steak's across a selection change; a
+steak added mid-cook going in on its own clock with the running cook untouched;
+and starting another cook clearing the whole oven and being able to start the
+next dinner. Seven of the eight fail on the code as it was, each at the
+assertion that names the defect; the eighth is the counterpart that says what
+must *not* change — the oven temperature still re-planning every steak — and
+passes either way. The single-steak wording of the query and of the finished
+card is held by the existing tests in `cook.spec.js` and `lifecycle.spec.js`,
+which still pass unchanged.
+
+**Which browser.** WebKit is the primary target and is what CI gates on, but the
+Playwright CDN is blocked from this sandbox, so this walkthrough and its tests
+were run under the `iphone-chromium` fallback project only. The three defects in
+this family that WebKit has historically caught and Chromium has not — elements
+rebuilt under a finger — were not re-examined here; their existing tests still
+pass, but under Chromium.

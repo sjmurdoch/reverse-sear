@@ -195,8 +195,7 @@
   }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-  .row { display: flex; gap: 10px; align-items: flex-end; }
-  .row .field { flex: 1; }
+  .pane { display: flex; flex-direction: column; gap: 10px; }
 
   button.primary, button.ghost {
     font-family: var(--sans); font-size: 15px; font-weight: 600;
@@ -299,12 +298,13 @@
   .spill.warn { background: var(--warn); border-color: var(--warn); color: #fff; }
   .srow.on { background: var(--surface-2); }
 
-  /* ---------- per-steak setup, all going in together ---------- */
-  .sblock { border: 1px solid var(--line); border-radius: 11px; padding: 12px; display: flex;
-            flex-direction: column; gap: 10px; }
-  .sblock .hd { display: flex; align-items: center; gap: 8px; }
-  .sblock .hd .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hue); }
-  .sblock .hd input { flex: 1; }
+  /* ---------- per-steak setup, all going in together ----------
+     Steak 1 uses the same block as the rest, so the panel reads as "the oven,
+     then one block per steak" and no field is ambiguous about whose it is. */
+  .sblock { border: 1px solid var(--line); border-radius: 11px; padding: 12px; }
+  .hd { display: flex; align-items: center; gap: 8px; }
+  .hd .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hue); }
+  .hd input { flex: 1; }
   .sblock .drop { background: none; border: 0; color: var(--ink-3); font-size: 17px;
                   padding: 4px 8px; cursor: pointer; border-radius: 6px; }
   .sblock .drop:hover, .sblock .drop:focus-visible { color: var(--ember); background: var(--ember-dim); }
@@ -374,24 +374,11 @@
   <details class="setup" id="setup" open>
     <summary><span>Setup</span><span id="setupDigest" style="letter-spacing:.04em;text-transform:none"></span></summary>
     <div class="body">
-      <div class="grid3">
+      <!-- The oven: shared by everything inside it. -->
+      <div class="grid2">
         <div class="field">
           <label for="ovenC">Oven °C</label>
           <input id="ovenC" type="number" inputmode="decimal" value="125" step="1">
-        </div>
-        <div class="field">
-          <label for="targetC">Target °C</label>
-          <input id="targetC" type="number" inputmode="decimal" value="44" step="0.5">
-        </div>
-        <div class="field">
-          <label for="massKg">Mass kg</label>
-          <input id="massKg" type="number" inputmode="decimal" value="1.0" step="0.1">
-        </div>
-      </div>
-      <div class="grid2">
-        <div class="field">
-          <label for="thickMm">Thickness mm</label>
-          <input id="thickMm" type="number" inputmode="decimal" value="40" step="1">
         </div>
         <div class="field">
           <label for="fanToggle">Oven type</label>
@@ -401,22 +388,44 @@
           </div>
         </div>
       </div>
-      <p class="note">Target is the core temperature <strong>as it leaves the oven</strong>. If you want it
-        higher on the plate, the rest and the sear add to it — set this to the number you want on the probe when
-        you open the door.</p>
-      <div id="extraSteaks" style="display:flex;flex-direction:column;gap:10px"></div>
-      <button class="ghost" id="addBtn" type="button">Add another steak</button>
-      <p class="note" id="priorNote"></p>
-      <div class="row">
-        <div class="field">
+
+      <!-- Then one block per steak.  The first steak's block is these fields:
+           they belong to it and to nothing else, whichever steak the readouts
+           happen to be showing. -->
+      <div class="pane" id="firstBlock" style="--hue:var(--s1)">
+        <div class="hd hidden" id="firstHead">
+          <i class="dot"></i>
+          <input id="firstName" type="text" aria-label="Name" value="Steak 1">
+        </div>
+        <div class="grid3">
+          <div class="field">
+            <label for="targetC">Target °C</label>
+            <input id="targetC" type="number" inputmode="decimal" value="44" step="0.5">
+          </div>
+          <div class="field">
+            <label for="thickMm">Thickness mm</label>
+            <input id="thickMm" type="number" inputmode="decimal" value="40" step="1">
+          </div>
+          <div class="field">
+            <label for="massKg">Mass kg</label>
+            <input id="massKg" type="number" inputmode="decimal" value="1.0" step="0.1">
+          </div>
+        </div>
+        <div class="field" id="startTempField">
           <label for="startTemp">Starting core °C</label>
           <input id="startTemp" type="number" inputmode="decimal" value="5" step="0.5">
         </div>
-        <button class="primary" id="startBtn" type="button">Start cook</button>
       </div>
+      <div id="extraSteaks" class="pane"></div>
+      <p class="note">Target is the core temperature <strong>as it leaves the oven</strong>. If you want it
+        higher on the plate, the rest and the sear add to it — set this to the number you want on the probe when
+        you open the door.</p>
+      <button class="ghost" id="addBtn" type="button">Add another steak</button>
+      <p class="note" id="priorNote"></p>
+      <button class="primary" id="startBtn" type="button">Start cook</button>
       <p class="dockwarn" id="startWarn" role="status"></p>
-      <p class="note">Probe the raw steak, type that number, and press <strong>Start cook</strong> as the steak
-        goes into the oven — that press is the clock's zero.</p>
+      <p class="note" id="startNote">Probe the raw steak, type that number, and press <strong>Start cook</strong>
+        as the steak goes into the oven — that press is the clock's zero.</p>
       <button class="ghost" id="resetBtn" type="button">Reset everything</button>
     </div>
   </details>
@@ -706,14 +715,32 @@ function readingProblem(val, ovenC) {
 // A reading far below the one before it, described for the cook.  Computed from
 // the readings themselves rather than remembered at the keystroke, so it
 // survives a reload and clears itself the moment the row is deleted.
-function suspectDrop(readings) {
+//
+// `name` is passed when there is more than one steak in the oven: the query
+// then has to say which steak it doubts, and where to find its readings, since
+// the table below shows only the selected one.
+function suspectDrop(readings, name) {
   if (readings.length < 2) return "";
   const last = readings[readings.length - 1], prev = readings[readings.length - 2];
   const drop = prev.temp - last.temp;
   if (drop < DROP_QUERY_C) return "";
-  return `${last.temp} °C is ${drop.toFixed(1)} °C below your last reading of ${prev.temp} °C, ` +
-    `and the core cannot cool in the oven. If that was a mistype, delete the row in Readings; ` +
-    `if the earlier reading was off-centre, carry on.`;
+  return `${name ? name + ": " : ""}${last.temp} °C is ${drop.toFixed(1)} °C below ` +
+    `${name ? "its" : "your"} last reading of ${prev.temp} °C, and the core cannot cool in the oven. ` +
+    `If that was a mistype, ${name ? `tap ${name} in the list and delete the row` : "delete the row"} ` +
+    `in Readings; if the earlier reading was off-centre, carry on.`;
+}
+
+// The query belongs to the steak the number was typed on, not to whichever
+// steak happens to be selected a moment later.  One trip is one sweep, and the
+// sweep moves the selection on as soon as a reading lands, so asking only about
+// the current steak swallowed the query for every steak but the last.
+function suspectDropAny() {
+  const running = activeSteaks();
+  for (const st of running) {
+    const msg = suspectDrop(st.readings, running.length > 1 ? st.name : null);
+    if (msg) return msg;
+  }
+  return "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -783,6 +810,13 @@ for (const k of PER_STEAK) {
 }
 
 const activeSteaks = () => state.steaks.filter(s => s.startedAt && !s.finishedAt);
+// Not in the oven right now: never started, or already out.  These are the ones
+// the Start button puts in -- and only these, so pressing it during a cook can
+// never re-zero the clock of a steak that is already in there.
+const pendingSteaks = () => state.steaks.filter(s => !s.startedAt || s.finishedAt);
+// The setup fields at the top of the panel belong to this steak, whichever
+// steak the readouts are pointed at.
+const firstSteak = () => state.steaks[0] || ensureSteak();
 const localMin = s => s.startedAt ? (Date.now() - s.startedAt) / 60000 : 0;
 const hueVar = s => "var(--s" + (Math.min(state.steaks.indexOf(s), MAX_STEAKS - 1) + 1) + ")";
 
@@ -822,8 +856,10 @@ function save() {
   } catch (e) { /* no-op */ }
 }
 
+/** The oven plus the first steak: what the fields at the top of Setup describe. */
 function cfg() {
-  return { ovenC: state.ovenC, targetC: state.targetC, massKg: state.massKg, thickMm: state.thickMm, fan: state.fan };
+  const s = firstSteak();
+  return { ovenC: state.ovenC, targetC: s.targetC, massKg: s.massKg, thickMm: s.thickMm, fan: state.fan };
 }
 function isStale() {
   const running = activeSteaks();
@@ -936,12 +972,18 @@ function adoptCoastPull() {
  * information. Rescheduling all of them when one is probed would end the sweep
  * early: the others' outstanding checks would jump into the future and the trip
  * would look finished after the first reading.
+ *
+ * `only` is that steak, or the several steaks that just went in together. Pass
+ * nothing only when the information really is shared -- the oven's temperature
+ * or its fan -- because every appointment then gets re-made, and one made a
+ * moment ago is floored at now + MIN_GAP_MIN, which is the walk-forward defect.
  */
 function rescheduleCheck(only) {
+  const scope = only ? (Array.isArray(only) ? only : [only]) : null;
   for (const st of state.steaks) {
     const f = fits.get(st.id);
     const fresh = (f && st.startedAt && !st.finishedAt) ? st.startedAt + f.plan.next * 60000 : null;
-    if (only && st.id !== only.id && st.dueAt != null) continue;
+    if (scope && !scope.some(x => x.id === st.id) && st.dueAt != null) continue;
     st.dueAt = fresh;
   }
 }
@@ -958,6 +1000,22 @@ function openingMin() {
 function dueMin() {
   if (state.dueAt == null) return plan ? plan.next : 0;
   return (state.dueAt - state.startedAt) / 60000;
+}
+
+/**
+ * The moment the card is counting down to, which is what the alarm must ring
+ * at.  With several steaks in, that is the trip -- the earliest appointment any
+ * of them holds -- and not the appointment of whichever steak the readouts
+ * happen to be showing.  Ringing on the selected steak left the phone silent
+ * while the card said "Open the oven now", which is the one promise this tool
+ * makes to a cook who puts the phone down.
+ */
+function alarmAt() {
+  if (activeSteaks().length > 1) {
+    const o = nextOpening();
+    if (o) return o.openAt;
+  }
+  return state.dueAt;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1023,12 +1081,41 @@ function render() {
     const want = who ? `${who} now` : "Core now";
     if (nowLabel.textContent !== want) nowLabel.textContent = want;
   }
-  // One press puts them all in, because that is the physical action.
+  // The first steak's block: named and colour-coded once it is one of several,
+  // plain when it is the only one.  Its fields are the first steak's whatever
+  // the readouts are pointed at, so it has to say so.
+  const s1 = firstSteak();
+  const several = state.steaks.length > 1;
+  $("firstHead").classList.toggle("hidden", !several);
+  const nameBox = $("firstName");
+  if (document.activeElement !== nameBox && nameBox.value !== s1.name) nameBox.value = s1.name;
+  const blockCls = several ? "pane sblock" : "pane";
+  if ($("firstBlock").className !== blockCls) $("firstBlock").className = blockCls;
+  // A steak that is already in the oven has no starting temperature left to ask
+  // for; the extras hide theirs the same way.
+  $("startTempField").classList.toggle("hidden", !!s1.startedAt && !s1.finishedAt);
+
+  // One press puts in everything that is not already in, because that is the
+  // physical action -- and because re-starting a steak that is already cooking
+  // would wipe its readings and move its clock's zero.
   const sb = $("startBtn");
-  if (sb) {
-    const want = state.steaks.length > 1 ? "All in the oven" : "Start cook";
-    if (sb.textContent !== want) sb.textContent = want;
-  }
+  const pending = pendingSteaks();
+  const startLabel = !pending.length ? "Everything is in the oven"
+    : activeSteaks().length ? (pending.length === 1
+        ? `${pending[0].name} into the oven` : `${pending.length} more into the oven`)
+    : several ? "All in the oven" : "Start cook";
+  if (sb.textContent !== startLabel) sb.textContent = startLabel;
+  sb.disabled = !pending.length;
+  // The note under it tells the cook when to press it, so it has to name the
+  // button that is actually there.
+  const wantNote = !several
+    ? "Probe the raw steak, type that number, and press <strong>Start cook</strong> as the steak " +
+      "goes into the oven — that press is the clock's zero."
+    : !pending.length
+      ? "Everything is in the oven. The clock's zero was the press that put each one in."
+      : `Probe each raw steak, type its number, and press <strong>${escapeHtml(startLabel)}</strong> ` +
+        "as they go into the oven — that press is the clock's zero.";
+  if ($("startNote").innerHTML !== wantNote) $("startNote").innerHTML = wantNote;
 
   // These belong to every state, including the ones that return early below.
   renderSteakList();
@@ -1045,7 +1132,7 @@ function render() {
 
   $("dock").classList.toggle("hidden", !active);
   // A refusal outranks a query: the cook has a number to correct either way.
-  const warn = dockNote || (started && !finished ? suspectDrop(state.readings) : "");
+  const warn = dockNote || (started && !finished ? suspectDropAny() : "");
   if ($("dockWarn").textContent !== warn) $("dockWarn").textContent = warn;
   // Before the first reading these are three empty cards between "Set up your
   // steak" and the form that does it, pushing the form off the bottom of the
@@ -1056,12 +1143,14 @@ function render() {
     ? "done"
     : started ? fmtClock(nowMin()) + " elapsed" : "not started";
 
-  $("setupDigest").textContent =
-    `${state.ovenC}°C ${state.fan ? "fan" : ""} · target ${state.targetC}°C · ${state.thickMm}mm`;
+  $("setupDigest").textContent = several
+    ? `${state.ovenC}°C ${state.fan ? "fan" : ""} · ${state.steaks.length} steaks`
+    : `${state.ovenC}°C ${state.fan ? "fan" : ""} · target ${state.targetC}°C · ${state.thickMm}mm`;
 
   const priors = buildPriors(cfg());
   $("priorNote").innerHTML =
-    `Before any reading: expected time constant <strong>${priors.tauMedian.toFixed(0)} min</strong>, ` +
+    `${several ? escapeHtml(s1.name) + " before" : "Before"} any reading: ` +
+    `expected time constant <strong>${priors.tauMedian.toFixed(0)} min</strong>, ` +
     `effective asymptote around <strong>${priors.tInfMean.toFixed(0)} °C</strong> once the surface has dried. ` +
     `Both get corrected by your first two readings.`;
 
@@ -1071,14 +1160,18 @@ function render() {
 
   if (finished) {
     v.className = "card verdict is-done";
-    $("verdictLabel").textContent = "Out of the oven";
+    // The number on this card is one steak's. With three in the oven, an
+    // unattributed "50.0 °C" is read as the dinner's verdict.
+    $("verdictLabel").textContent = several ? `Out of the oven — ${cur().name}` : "Out of the oven";
     $("verdictClock").textContent = state.finalTemp != null ? state.finalTemp.toFixed(1) + " °C" : "done";
     $("verdictClock").className = "clock";
     $("verdictAt").textContent = "after " + Math.round((state.finishedAt - state.startedAt) / 60000) +
       " min  ·  pulled at " + new Date(state.finishedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     $("verdictWhy").textContent =
       "Rest it — the core drifts up a couple of degrees off the heat, and the sear adds more. Sear when you are ready.";
-    setAction(actsEl, "again", '<button class="ghost" type="button">Start another steak</button>', startAnother);
+    setAction(actsEl, several ? "again-many" : "again",
+      `<button class="ghost" type="button">${several ? "Start another cook" : "Start another steak"}</button>`,
+      startAnother);
     if (state.finalTemp != null) {
       $("statNow").innerHTML = state.finalTemp.toFixed(1) + '<span class="unit"> °C</span>';
       $("statNowSpread").textContent = "at the moment you pulled it";
@@ -1096,7 +1189,9 @@ function render() {
     $("verdictAt").textContent = "started " + new Date(state.startedAt).toLocaleString([], {
       weekday: "short", hour: "2-digit", minute: "2-digit" });
     $("verdictWhy").textContent = "This one is long finished. Start a new steak, or carry on if you really are still cooking.";
-    setAction(actsEl, "again-stale", '<button class="primary" type="button">Start another steak</button>', startAnother);
+    setAction(actsEl, several ? "again-stale-many" : "again-stale",
+      `<button class="primary" type="button">${several ? "Start another cook" : "Start another steak"}</button>`,
+      startAnother);
     drawChart();
     renderLog();
     return;
@@ -1195,9 +1290,13 @@ function render() {
     ? "Screen kept awake — leave this page open and it will beep"
     : "Only beeps while this page is open — set a phone timer for " + fmtWall(promised);
 
-  if (due && !alarmFired && armed) { alarmFired = true; beep(); }
+  // Not `due`: that is this steak's own appointment, and with several in the
+  // oven the card is counting down to the trip instead.  See alarmAt().
+  const ringAt = alarmAt();
+  const ringing = ringAt != null && Date.now() >= ringAt;
+  if (ringing && !alarmFired && armed) { alarmFired = true; beep(); }
   armed = true;
-  if (!due) alarmFired = false;
+  if (!ringing) alarmFired = false;
 
   $("statNow").innerHTML = nMid.toFixed(1) + '<span class="unit"> °C</span>';
   $("statNowSpread").textContent = nLo.toFixed(1) + "–" + nHi.toFixed(1);
@@ -1265,12 +1364,22 @@ function renderTrip() {
       ? `at ${fmtWallClock(o.openAt)} · first out ${fmtWallClock(pullTimes[0])}, last ${fmtWallClock(pullTimes[pullTimes.length - 1])}`
       : `at ${fmtWallClock(o.openAt)}`;
 
+  // Only the steaks whose plan is still "measure" want a reading; the ones
+  // coasting were told the door would stay shut, and ordering a probe of them
+  // contradicts their own row in the list below.
+  const wantProbe = o.orders.filter(x => x.kind === "probe").length;
+  const rest = running.length - wantProbe;
+  const probeLine = wantProbe === running.length
+    ? `Probe all ${running.length} while the door is open — once it is open the rest cost nothing.`
+    : wantProbe > 0
+      ? `Probe ${wantProbe === 1 ? "the one that wants it" : "the " + wantProbe + " that want it"} — ` +
+        `the ${rest === 1 ? "other is" : "other " + rest + " are"} coasting and go straight back.`
+      : "Everything else is coasting — straight back in.";
   $("verdictWhy").textContent = out.length
     ? (running.length - out.length > 0
         ? `Take ${out.length === 1 ? "it" : "them"} out; the rest go straight back in.`
         : "That is everything.")
-    : due
-      ? `Probe all ${running.length} while the door is open — once it is open the rest cost nothing.`
+    : due ? probeLine
       : `One trip to the oven, then everything gets probed at once.`;
 
   setAction($("verdictActs"), out.length ? "out" : "",
@@ -1290,7 +1399,10 @@ function finishSteak(st) {
   if (!activeSteaks().length) releaseWakeLock();
   const nxt = activeSteaks()[0];
   if (nxt) state.current = nxt.id;
-  recompute(); rescheduleCheck(); save(); render();
+  // Only this steak's appointment is over. The steaks still in the oven learned
+  // nothing from one of their neighbours leaving, so their promised checks
+  // stand: re-making them here pushed each one out to now + MIN_GAP_MIN.
+  recompute(); rescheduleCheck(st); save(); render();
   showVerdict();
 }
 
@@ -1402,7 +1514,7 @@ function renderExtraSteaks() {
   const host = $("extraSteaks");
   const html = state.steaks.slice(1).map((s, k) => {
     const i = k + 1;
-    return `<div class="sblock" style="--hue:var(--s${Math.min(i, MAX_STEAKS - 1) + 1})" data-s="${s.id}">
+    return `<div class="pane sblock" style="--hue:var(--s${Math.min(i, MAX_STEAKS - 1) + 1})" data-s="${s.id}">
       <div class="hd"><i class="dot"></i>
         <input type="text" data-f="name" data-s="${s.id}" value="${escapeHtml(s.name)}" aria-label="Name">
         <button class="drop" data-rm="${s.id}" type="button" aria-label="Remove this steak">×</button></div>
@@ -1414,7 +1526,7 @@ function renderExtraSteaks() {
         <div class="field"><label>Mass kg</label>
           <input type="number" inputmode="decimal" step="0.1" data-f="massKg" data-s="${s.id}" value="${s.massKg}"></div>
       </div>
-      ${s.startedAt ? "" : `<div class="field"><label>Starting core °C</label>
+      ${s.startedAt && !s.finishedAt ? "" : `<div class="field"><label>Starting core °C</label>
         <input type="number" inputmode="decimal" step="0.5" data-f="startTemp" data-s="${s.id}" value="5"></div>`}
     </div>`;
   }).join("");
@@ -1635,18 +1747,38 @@ function beep() {
 }
 
 /* ---------- wiring ---------- */
+// The three steak fields at the top of Setup are the *first* steak's, written
+// explicitly rather than through the per-steak accessors: those follow whichever
+// steak the readouts are pointed at, so tapping a row in the list silently
+// re-aimed this form at that steak while still showing the first one's numbers.
 function readSetup() {
   state.ovenC = parseFloat($("ovenC").value) || 125;
-  state.targetC = parseFloat($("targetC").value) || 44;
-  state.massKg = parseFloat($("massKg").value) || 1;
-  state.thickMm = parseFloat($("thickMm").value) || 40;
+  const s = firstSteak();
+  s.targetC = parseFloat($("targetC").value) || 44;
+  s.massKg = parseFloat($("massKg").value) || 1;
+  s.thickMm = parseFloat($("thickMm").value) || 40;
   save();
 }
 
-["ovenC", "targetC", "massKg", "thickMm"].forEach(id => {
+// A steak's own fields are new information about that steak alone. Rescheduling
+// every steak here walked the others' outstanding checks forward -- the
+// walk-forward defect again, one keystroke at a time.
+["targetC", "massKg", "thickMm"].forEach(id => {
   $(id).addEventListener("input", () => {
-    readSetup(); recompute(); rescheduleCheck(); save(); render();
+    readSetup(); recompute(); rescheduleCheck(firstSteak()); save(); render();
   });
+});
+
+// The oven is shared, so a change to it really is new information about every
+// steak inside, and every appointment is re-made.
+$("ovenC").addEventListener("input", () => {
+  readSetup(); recompute(); rescheduleCheck(); save(); render();
+});
+
+$("firstName").addEventListener("input", () => {
+  const s = firstSteak();
+  s.name = $("firstName").value.slice(0, 20) || s.name;
+  save(); render();
 });
 
 $("fanToggle").addEventListener("click", e => {
@@ -1657,12 +1789,22 @@ $("fanToggle").addEventListener("click", e => {
   recompute(); rescheduleCheck(); save(); render();
 });
 
+// "Another" means another dinner, not another steak. The per-steak accessors
+// clear the selected steak only, which left the rest of the oven marked "out"
+// for ever -- and with no starting-temperature box to put them back in, since
+// those are hidden for a steak that has started, the next dinner could not be
+// started at all.
 function startAnother() {
-  state.startedAt = null;
-  state.dueAt = null;
-  state.finishedAt = null;
-  state.finalTemp = null;
-  state.readings = [];
+  for (const st of state.steaks) {
+    st.startedAt = null;
+    st.dueAt = null;
+    st.finishedAt = null;
+    st.finalTemp = null;
+    st.readings = [];
+  }
+  state.current = (state.steaks[0] || {}).id || null;
+  ensureSteak();
+  fits.clear();
   samples = null; plan = null;
   readingAge = 0;
   dockNote = "";
@@ -1695,7 +1837,9 @@ $("addBtn").addEventListener("click", () => {
     st.startedAt = null;
   }
   state.steaks.push(st);
-  recompute(); rescheduleCheck(); save(); render();
+  // Adding a steak to the list tells the steaks already cooking nothing, so
+  // their appointments stand.
+  recompute(); save(); render();
 });
 
 $("extraSteaks").addEventListener("input", e => {
@@ -1707,7 +1851,7 @@ $("extraSteaks").addEventListener("input", e => {
   if (f === "name") st.name = el.value.slice(0, 20) || st.name;
   else if (f === "startTemp") return;    // only read when they go in
   else st[f] = parseFloat(el.value) || st[f];
-  recompute(); rescheduleCheck(); save(); render();
+  recompute(); rescheduleCheck(st); save(); render();
 });
 
 $("extraSteaks").addEventListener("click", e => {
@@ -1716,7 +1860,9 @@ $("extraSteaks").addEventListener("click", e => {
   state.steaks = state.steaks.filter(x => x.id !== rm.dataset.rm);
   fits.delete(rm.dataset.rm);
   ensureSteak();
-  recompute(); rescheduleCheck(); save(); render();
+  // Taking a steak out of the list tells the remaining steaks nothing, so their
+  // appointments stand.
+  recompute(); save(); render();
 });
 
 // Tapping a row points the readouts, the chart band and the dock at that steak.
@@ -1730,41 +1876,46 @@ $("steakList").addEventListener("click", e => {
   recompute(); save(); render();
 });
 
+const startBoxOf = st => state.steaks.indexOf(st) === 0 ? $("startTemp")
+  : document.querySelector(`input[data-f="startTemp"][data-s="${st.id}"]`);
+
 $("startBtn").addEventListener("click", () => {
   readSetup();
-  // They go in together, on separate shelves, so one press starts all of them.
-  const temps = state.steaks.map((st, i) => {
-    const box = i === 0 ? $("startTemp")
-      : document.querySelector(`input[data-f="startTemp"][data-s="${st.id}"]`);
-    return parseFloat(box && box.value);
-  });
-  for (let i = 0; i < state.steaks.length; i++) {
+  // They go in together, on separate shelves, so one press starts them -- but
+  // only the ones that are not already in there. Restarting a running steak
+  // would throw away its readings and move the clock's zero under a live cook,
+  // which is what this press used to do to a cook that had a steak added to it.
+  const going = pendingSteaks();
+  if (!going.length) return;
+  const temps = going.map(st => parseFloat((startBoxOf(st) || {}).value));
+  for (let i = 0; i < going.length; i++) {
     const bad = readingProblem(temps[i], state.ovenC);
     if (bad) {
       $("startWarn").textContent = state.steaks.length > 1
-        ? `${state.steaks[i].name}: ${bad.charAt(0).toLowerCase()}${bad.slice(1)}` : bad;
-      const box = i === 0 ? $("startTemp")
-        : document.querySelector(`input[data-f="startTemp"][data-s="${state.steaks[i].id}"]`);
+        ? `${going[i].name}: ${bad.charAt(0).toLowerCase()}${bad.slice(1)}` : bad;
+      const box = startBoxOf(going[i]);
       if (box) box.focus();
       return;
     }
   }
   $("startWarn").textContent = "";
   const at = Date.now();
-  state.steaks.forEach((st, i) => {
+  going.forEach((st, i) => {
     st.startedAt = at;
     st.finishedAt = null;
     st.finalTemp = null;
     st.dueAt = null;
     st.readings = [{ t: 0, temp: temps[i] }];
   });
-  state.current = state.steaks[0].id;
+  // Keep the readouts on the steak they were on if it is still cooking; a steak
+  // put into a running cook must not steal the card from the one in progress.
+  if (!activeSteaks().some(st => st.id === state.current)) state.current = going[0].id;
   save();
   $("setup").open = false;
   // The first tap is the only reliable moment to unblock audio, so take it.
   try { (audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)()).resume(); } catch (e) {}
   acquireWakeLock();
-  recompute(); rescheduleCheck(); save(); render();
+  recompute(); rescheduleCheck(going); save(); render();
   showVerdict();
 });
 
@@ -1829,7 +1980,7 @@ $("log").addEventListener("click", e => {
   if (!b) return;
   state.readings.splice(parseInt(b.dataset.i, 10), 1);
   dockNote = "";
-  recompute(); rescheduleCheck(); save(); render();
+  recompute(); rescheduleCheck(cur()); save(); render();
 });
 
 $("resetBtn").addEventListener("click", startAnother);
@@ -1846,13 +1997,17 @@ document.addEventListener("visibilitychange", () => {
 load();
 ensureSteak();
 $("ovenC").value = state.ovenC;
-$("targetC").value = state.targetC;
-$("massKg").value = state.massKg;
-$("thickMm").value = state.thickMm;
+$("targetC").value = firstSteak().targetC;
+$("massKg").value = firstSteak().massKg;
+$("thickMm").value = firstSteak().thickMm;
+$("firstName").value = firstSteak().name;
 [...$("fanToggle").children].forEach(c => c.setAttribute("aria-pressed", String((c.dataset.fan === "1") === !!state.fan)));
 if (state.startedAt) $("setup").open = false;
 recompute();
-if (state.startedAt && !state.finishedAt && state.dueAt == null) { rescheduleCheck(); save(); }
+// A cook resumed from storage keeps every promise it made; only a steak that
+// somehow has none gets a fresh one.
+const unplanned = state.steaks.filter(s => s.startedAt && !s.finishedAt && s.dueAt == null);
+if (unplanned.length) { rescheduleCheck(unplanned); save(); }
 render();
 acquireWakeLock();
 

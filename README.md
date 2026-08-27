@@ -199,7 +199,8 @@ timer for it.
 
 Open <https://sjmurdoch.github.io/reverse-sear/> on the phone, then:
 
-1. **Setup** — oven temperature, target, mass, thickness, fan or conventional.
+1. **Setup** — first the oven (temperature, fan or conventional), then the steak
+   in its own block: target, thickness, mass and its starting core.
 2. Probe the steak, enter that number as the starting core, hit **Start cook**
    as it goes into the oven.
 3. When the countdown expires, take it out, probe the *thermal centre*, put it
@@ -208,8 +209,18 @@ Open <https://sjmurdoch.github.io/reverse-sear/> on the phone, then:
    again; take it out then.
 
 When the app says to take the steak out, **Out of the oven** records the
-estimated core at that moment and ends the cook; **Start another steak** clears
-it for the next one.
+estimated core at that moment and ends the cook; **Start another steak** — or
+**Start another cook**, with more than one in — clears the oven for the next one.
+
+**Several steaks.** *Add another steak* gives up to three of them their own
+name, target, thickness and mass, and one press puts them all in. The card then
+counts down to a *trip to the oven* rather than to one check per steak: the door
+opens when the most urgent steak needs it, everything gets probed while it is
+open, and the dock walks through them one at a time ("Sirloin — 2 of 3"). Each
+steak still keeps its own appointment and its own pull time, so sharing a trip
+can only move a check earlier than that steak asked for. A steak added after the
+cook has started goes in on its own clock, without disturbing the ones already
+in there.
 
 Everything is kept in `localStorage`, so closing Safari, locking the phone or
 switching apps loses nothing — reopen the page and the cook picks up exactly

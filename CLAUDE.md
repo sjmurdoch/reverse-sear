@@ -55,7 +55,31 @@ measures it at ~20% fewer openings and better accuracy than one steak per trip).
 **`rescheduleCheck(only)` must not reschedule every steak.** An appointment
 belongs to one steak and is reset only by that steak's own reading. Rescheduling
 all of them when one was probed pushed the others' checks into the future, ended
-the sweep after the first number, and left two steaks unlogged.
+the sweep after the first number, and left two steaks unlogged. `only` is one
+steak or the several that just went in together; pass nothing only for the two
+things that really are shared, the oven's temperature and its fan. Adding,
+removing or pulling a steak re-plans nothing — the others learned nothing from
+it, and an appointment re-made now is floored at `now + MIN_GAP_MIN`, which is
+walkthrough 1's walk-forward defect.
+
+**The alarm rings at `alarmAt()`, never at `state.dueAt` directly.** With
+several steaks in, the card counts down to the *trip*; `state.dueAt` is the
+selected steak's own appointment, and ringing from it left the phone silent for
+minutes while the card said "Open the oven now".
+
+**Nothing that belongs to the whole oven may go through the per-steak
+accessors.** They read and write whichever steak is *selected*, so anything
+about the oven or about a specific steak has to name it: the Setup form's steak
+fields are `firstSteak()`'s, the implausible-reading query is asked of every
+running steak (`suspectDropAny()`), and `startAnother()` clears the cook on all
+of them — clearing only the selected one stranded the rest with no
+starting-temperature box and no way to start the next dinner.
+
+**The Start button puts in `pendingSteaks()` and nothing else.** Starting a
+steak that is already cooking re-zeroes its clock and throws away its readings.
+Steaks going in together share one `startedAt`; one added mid-cook gets its own,
+which every downstream path (`localMin`, `steakTimes`, the chart's `shift`)
+already expects.
 
 **Anything `render()` repaints every second must be updated in place, not
 rewritten from a string.** The verdict's action button, the readings table and
