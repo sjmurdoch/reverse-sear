@@ -57,6 +57,13 @@ belongs to one steak and is reset only by that steak's own reading. Rescheduling
 all of them when one was probed pushed the others' checks into the future, ended
 the sweep after the first number, and left two steaks unlogged.
 
+**Exactly one code path may own the action button.** `renderTrip()` owns it once
+more than one steak is in; the single-steak path must not also call
+`setAction()`. Two calls per tick with different `kind` values rebuild the
+button every second and a tap lands on an element that has just been detached.
+WebKit catches this and Chromium does not — it is the same defect the readings
+table had.
+
 **`render()` returns early in several states.** Anything that must paint in all
 of them — the glance list, the per-steak setup blocks, the dock's pass label —
 has to run *before* those returns, at the top of `render()`.

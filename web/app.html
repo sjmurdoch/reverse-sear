@@ -1182,7 +1182,13 @@ function render() {
       ? "Nothing is fitted yet — this is the prior for a steak this size in an oven this hot. The first check is the one that turns it into a prediction."
       : plan.why;
 
-  setAction(actsEl, pullNow ? "out" : "", pullNow ? '<button class="primary" type="button">Out of the oven</button>' : "", finishCook);
+  // renderTrip() owns the action button once more than one steak is in. Two
+  // setAction() calls per tick with different kinds rebuild the button every
+  // second, and a tap then lands on an element that has just been detached --
+  // the same defect the readings table had.
+  if (activeSteaks().length <= 1) {
+    setAction(actsEl, pullNow ? "out" : "", pullNow ? '<button class="primary" type="button">Out of the oven</button>' : "", finishCook);
+  }
 
   wakeEl.classList.toggle("live", !!wakeLock);
   wakeEl.textContent = wakeLock

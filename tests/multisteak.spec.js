@@ -112,6 +112,28 @@ test.describe('three steaks, one oven', () => {
     expect((await app.read()).label).not.toMatch(/take out sirloin/i);
   });
 
+  test('the pull button is not rebuilt under the chef\'s finger', async ({ app }) => {
+    // WebKit caught this: with two steaks in, the single-steak path and the
+    // trip card both called setAction() each tick with different kinds, so the
+    // button churned once a second and the tap landed on a detached element.
+    await app.seedMany([
+      { name: 'Ribeye', thickMm: 48, targetC: 44, readings: [[0, 5], [16, 20], [28, 32]] },
+      { name: 'Sirloin', thickMm: 28, targetC: 44, readings: [[0, 12], [16, 34], [28, 43]] },
+    ]);
+    await app.drift(6);
+    const stable = await app.page.evaluate(async () => {
+      const first = document.querySelector('#verdictActs button');
+      if (!first) return { present: false };
+      first.dataset.marked = 'yes';
+      await new Promise(r => setTimeout(r, 2600));   // several render ticks
+      const now = document.querySelector('#verdictActs button');
+      return { present: true, same: now === first, marked: !!now && now.dataset.marked === 'yes' };
+    });
+    expect(stable.present).toBe(true);
+    expect(stable.same, 'the action button must survive the render tick').toBe(true);
+    expect(stable.marked).toBe(true);
+  });
+
   test('per-steak targets order the pulls', async ({ app }) => {
     await app.seedMany([
       { name: 'Rare', targetC: 44, readings: [[0, 5], [20, 26]] },
