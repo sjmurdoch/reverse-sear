@@ -19,11 +19,10 @@ test.describe('logging readings', () => {
     expect(rows[1][1]).toBe('12.4 °C');
     expect(await app.page.inputValue('#readTemp')).toBe('');
 
-    const onScreen = await app.page.evaluate(() => {
+    await expect.poll(() => app.page.evaluate(() => {
       const b = document.getElementById('verdict').getBoundingClientRect();
       return b.top >= -8 && b.top < window.innerHeight;
-    });
-    expect(onScreen).toBe(true);
+    }), { message: 'the verdict card must end up visible after acting' }).toBe(true);
   });
 
   test('a reading can be backdated to when it was actually taken', async ({ app }) => {
@@ -60,6 +59,30 @@ test.describe('logging readings', () => {
     const rows = await app.rows();
     expect(rows.length).toBe(2);
     expect(rows.map(r => r[1])).not.toContain('99.0 °C');
+  });
+
+  // WebKit caught this: renderLog() rewrote the whole table on every one-second
+  // tick, so a delete button was destroyed and recreated under the user's
+  // finger and the tap was lost. Chromium happened to win the race.
+  test('the readings table is not rebuilt under the user\'s finger', async ({ app }) => {
+    await app.seed([[0, 5], [14, 12], [26, 22]]);
+    const stable = await app.page.evaluate(async () => {
+      const first = document.querySelectorAll('#log button.del')[0];
+      first.dataset.marked = 'yes';
+      await new Promise(r => setTimeout(r, 2600));   // several render ticks
+      const now = document.querySelectorAll('#log button.del')[0];
+      return { same: now === first, marked: now && now.dataset.marked === 'yes' };
+    });
+    expect(stable.same, 'the delete button must survive the render tick').toBe(true);
+    expect(stable.marked).toBe(true);
+  });
+
+  test('but it does update when a reading is added', async ({ app }) => {
+    await app.seed([[0, 5], [14, 12]]);
+    expect((await app.rows()).length).toBe(2);
+    await app.advance(6);
+    await app.log(18.2);
+    expect((await app.rows()).length).toBe(3);
   });
 
   test('non-numeric input is refused rather than logged', async ({ app }) => {

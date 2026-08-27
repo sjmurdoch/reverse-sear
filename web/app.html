@@ -710,10 +710,18 @@ function setAction(host, kind, html, handler) {
 function showVerdict() {
   const el = $("verdict");
   if (!el) return;
-  const r = el.getBoundingClientRect();
-  if (r.top < 0 || r.bottom > window.innerHeight) {
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const go = () => {
+    const r = el.getBoundingClientRect();
+    if (r.top < -1 || r.bottom > window.innerHeight) {
+      el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    }
+  };
+  go();
+  // Blurring the input dismisses the keyboard, and iOS scrolls the page as it
+  // goes -- which can undo the scroll we just asked for. Assert it again once
+  // that has settled.
+  requestAnimationFrame(() => requestAnimationFrame(go));
 }
 
 let alarmFired = false;
@@ -883,14 +891,23 @@ function render() {
   renderLog();
 }
 
+let lastLogHtml = null;
 function renderLog() {
   const tb = $("log");
+  const html = buildLogRows();
+  // render() runs every second; only touch the DOM when the rows actually
+  // change, or a delete button can be swapped out from under a finger.
+  if (html === lastLogHtml) return;
+  lastLogHtml = html;
+  tb.innerHTML = html;
+}
+
+function buildLogRows() {
   if (!state.readings.length) {
-    tb.innerHTML = '<tr><td colspan="4" style="color:var(--ink-3);border-top:0">Nothing logged yet.</td></tr>';
-    return;
+    return '<tr><td colspan="4" style="color:var(--ink-3);border-top:0">Nothing logged yet.</td></tr>';
   }
   const med = samples ? medianParams() : null;
-  tb.innerHTML = state.readings.map((r, i) => {
+  return state.readings.map((r, i) => {
     let resid = "";
     if (med) {
       const d = r.temp - modelTemp(med, r.t);
@@ -905,9 +922,14 @@ function renderLog() {
   }).join("");
 }
 
+// The posterior only moves when a reading arrives, so cache the medians against
+// the sample set rather than re-sorting 4000 draws every second.
+let medCache = null, medCacheFor = null;
 function medianParams() {
-  const cols = [0, 1, 2, 3].map(j => pcts(samples.map(s => s[j]), [0.5])[0]);
-  return cols;
+  if (medCacheFor === samples) return medCache;
+  medCacheFor = samples;
+  medCache = [0, 1, 2, 3].map(j => pcts(samples.map(s => s[j]), [0.5])[0]);
+  return medCache;
 }
 
 /* ---------- chart ---------- */

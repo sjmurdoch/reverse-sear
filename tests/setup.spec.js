@@ -94,11 +94,10 @@ test.describe('setting up a cook', () => {
     expect(r.dockHidden).toBe(false);
     expect(r.label).toMatch(/next check/i);
 
-    const onScreen = await app.page.evaluate(() => {
+    await expect.poll(() => app.page.evaluate(() => {
       const b = document.getElementById('verdict').getBoundingClientRect();
       return b.top >= -8 && b.top < window.innerHeight;
-    });
-    expect(onScreen, 'the verdict card must be visible after acting').toBe(true);
+    }), { message: 'the verdict card must be visible after acting' }).toBe(true);
 
     const s = await app.state();
     expect(s.readings).toEqual([{ t: 0, temp: 5 }]);
