@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fit import (  # noqa: E402
     Priors,
+    Steak,
+    advise_batch,
     _lambda1,
     advise,
     default_priors,
@@ -260,6 +262,87 @@ class TestAdvise(unittest.TestCase):
         # relative to when it is predicted to finish.
         vague = advise(self._post([0.0], [5.0]), 0.0, 44.0)
         self.assertLess(vague.next_check_min, vague.hit_time[1])
+
+
+class TestBatchedSchedule(unittest.TestCase):
+    """Several steaks, one oven: the door is shared, so the schedule is too."""
+
+    def _steak(self, ts, temps, target=44.0, offset=0.0, name="a", thickness=0.040, mass=1.0, seed=3):
+        pr = default_priors(mass, thickness, 125.0)
+        return Steak(fit(ts, temps, pr, seed=seed), target, offset, name)
+
+    def test_the_door_opens_when_the_most_urgent_steak_needs_it(self):
+        early = self._steak([0.0, 20.0], [5.0, 26.0], name="early")
+        late = self._steak([0.0, 20.0], [5.0, 14.0], name="late")
+        adv = advise_batch([early, late], 20.0)
+
+        solo_early = advise(early.posterior, 20.0, 44.0)
+        solo_late = advise(late.posterior, 20.0, 44.0)
+        self.assertAlmostEqual(adv.open_at_min, min(solo_early.next_check_min, solo_late.next_check_min), places=6)
+
+    def test_batching_never_checks_a_steak_later_than_it_asked(self):
+        # This is the safety property: sharing an opening can only move a check
+        # earlier, so every steak keeps its own overshoot guarantee.
+        steaks = [
+            self._steak([0.0, 20.0], [5.0, 26.0], name="a", seed=1),
+            self._steak([0.0, 20.0], [5.0, 14.0], name="b", thickness=0.055, seed=2),
+            self._steak([0.0, 18.0], [7.0, 22.0], name="c", thickness=0.030, seed=3),
+        ]
+        adv = advise_batch(steaks, 20.0)
+        for s in steaks:
+            solo = advise(s.posterior, 20.0 - s.offset_min, s.target)
+            self.assertLessEqual(adv.open_at_min, s.offset_min + solo.next_check_min + 1e-6, s.name)
+
+    def test_everything_that_wants_a_reading_is_probed_while_the_door_is_open(self):
+        steaks = [
+            self._steak([0.0, 20.0], [5.0, 26.0], name="a", seed=1),
+            self._steak([0.0, 20.0], [5.0, 14.0], name="b", seed=2),
+        ]
+        adv = advise_batch(steaks, 20.0)
+        kinds = {n: k for n, k, _ in adv.per_steak}
+        self.assertEqual(set(kinds.values()), {"probe"})
+
+    def test_a_steak_at_temperature_is_pulled_and_the_others_are_probed(self):
+        hot = self._steak([0.0, 20.0, 40.0], [5.0, 25.0, 45.0], name="hot", seed=1)
+        cold = self._steak([0.0, 20.0], [5.0, 14.0], name="cold", seed=2)
+        adv = advise_batch([hot, cold], 40.0)
+        kinds = {n: k for n, k, _ in adv.per_steak}
+        self.assertEqual(kinds["hot"], "pull")
+        self.assertEqual(kinds["cold"], "probe")
+        self.assertAlmostEqual(adv.open_at_min, 40.0, places=6)
+        self.assertIn("hot", adv.reason)
+
+    def test_a_steak_still_to_go_in_gets_its_own_appointment(self):
+        cooking = self._steak([0.0, 20.0], [5.0, 14.0], name="in", seed=1)
+        later = Steak(fit([0.0], [5.0], default_priors(1.0, 0.030, 125.0), seed=2),
+                      44.0, offset_min=26.0, name="later")
+        adv = advise_batch([cooking, later], 20.0)
+        kinds = {n: k for n, k, _ in adv.per_steak}
+        self.assertEqual(kinds["later"], "put in")
+        self.assertLessEqual(adv.open_at_min, 26.0 + 1e-6)
+
+    def test_steaks_already_out_are_left_alone(self):
+        a = self._steak([0.0, 20.0], [5.0, 26.0], name="a", seed=1)
+        b = self._steak([0.0, 20.0], [5.0, 14.0], name="b", seed=2)
+        b.done = True
+        adv = advise_batch([a, b], 20.0)
+        kinds = {n: k for n, k, _ in adv.per_steak}
+        self.assertEqual(kinds["b"], "done")
+        solo = advise(a.posterior, 20.0, 44.0)
+        self.assertAlmostEqual(adv.open_at_min, solo.next_check_min, places=6)
+
+    def test_everything_out_means_nothing_to_do(self):
+        a = self._steak([0.0, 20.0], [5.0, 26.0], name="a")
+        a.done = True
+        adv = advise_batch([a], 30.0)
+        self.assertEqual(adv.open_at_min, 30.0)
+        self.assertIn("out", adv.reason.lower())
+
+    def test_per_steak_targets_are_respected(self):
+        rare = self._steak([0.0, 25.0], [5.0, 30.0], target=44.0, name="rare", seed=4)
+        medium = self._steak([0.0, 25.0], [5.0, 30.0], target=54.0, name="medium", seed=4)
+        adv = advise_batch([rare, medium], 25.0)
+        self.assertLess(adv.pull_times["rare"], adv.pull_times["medium"])
 
 
 class TestPolicyAccuracy(unittest.TestCase):

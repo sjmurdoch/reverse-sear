@@ -334,3 +334,99 @@ if __name__ == "__main__":
     a = advise(post, 0.0)
     print(f"with only the starting reading: hit 44 C at {a.hit_time[1]:.0f} min "
           f"[{a.hit_time[0]:.0f}-{a.hit_time[2]:.0f}], first check at {a.next_check_min:.0f} min")
+
+
+# ---------------------------------------------------------------------------
+# several steaks, one oven
+# ---------------------------------------------------------------------------
+@dataclass
+class Steak:
+    """One steak in a shared oven.
+
+    `offset_min` is when it went in, on the session clock -- the session starts
+    when the first steak does, so a steak added later has a positive offset.
+    """
+
+    posterior: Posterior
+    target: float = 44.0
+    offset_min: float = 0.0
+    name: str = ""
+    done: bool = False
+
+
+@dataclass
+class BatchAdvice:
+    open_at_min: float  # session minutes of the next door opening
+    per_steak: list  # (name, instruction, note) in the order given
+    pull_times: dict  # name -> session minutes it should come out
+    reason: str
+
+
+def advise_batch(
+    steaks: list[Steak],
+    now_min: float,
+    **advise_kwargs,
+) -> BatchAdvice:
+    """When should the oven door next open, and what to do with each steak?
+
+    Opening the door costs heat for *every* steak inside, so the schedule is a
+    list of openings rather than one schedule per steak.  The rule:
+
+      * each steak still gets its own `advise()` call, on its own clock;
+      * the door opens at the *earliest* moment any steak needs it;
+      * while it is open, every steak that wants a reading gets probed, because
+        the expensive part -- the opening -- has already been paid for.
+
+    Batching can only move a check earlier than that steak asked for, never
+    later, so every steak's own overshoot guarantee still holds.  What changes
+    is the number of openings, which is what the cook is actually paying.
+    """
+    active = [s for s in steaks if not s.done]
+    if not active:
+        return BatchAdvice(now_min, [(s.name, "done", "already out") for s in steaks], {}, "Everything is out.")
+
+    events, pulls, plans = {}, {}, {}
+    for s in active:
+        local = now_min - s.offset_min
+        if local < 0:
+            # Not in the oven yet; it wants the door open when it goes in.
+            events[s.name] = s.offset_min
+            plans[s.name] = None
+            continue
+        adv = advise(s.posterior, local, s.target, **advise_kwargs)
+        plans[s.name] = adv
+        pull = s.offset_min + (local if adv.action == "pull" else adv.pull_min)
+        pulls[s.name] = pull
+        if adv.action == "pull":
+            events[s.name] = now_min
+        elif adv.action == "coast":
+            events[s.name] = pull
+        else:
+            events[s.name] = s.offset_min + adv.next_check_min
+
+    open_at = min(events.values())
+    tol = 0.5
+
+    per_steak = []
+    for s in steaks:
+        if s.done:
+            per_steak.append((s.name, "done", "already out"))
+            continue
+        adv = plans.get(s.name)
+        if adv is None:
+            per_steak.append((s.name, "put in", f"goes in at {s.offset_min:.0f} min"))
+        elif pulls.get(s.name, math.inf) <= open_at + tol:
+            per_steak.append((s.name, "pull", "at temperature"))
+        elif adv.action == "measure":
+            per_steak.append((s.name, "probe", "the door is open anyway"))
+        else:
+            per_steak.append((s.name, "optional", f"coasting to {pulls[s.name]:.0f} min"))
+
+    driver = min(events, key=events.get)
+    pulling = [n for n, i, _ in per_steak if i == "pull"]
+    if pulling:
+        reason = f"{', '.join(pulling)} at temperature; probe the rest while the door is open."
+    else:
+        reason = f"{driver} needs the earliest check; probe the rest while the door is open."
+
+    return BatchAdvice(open_at, per_steak, pulls, reason)
