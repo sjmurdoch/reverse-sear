@@ -47,11 +47,11 @@ jobs:
           python web/build.py --out _site/index.html
           touch _site/.nojekyll
 
-      # enablement turns Pages on for the repo if it is not already, so the
-      # first run of this workflow is all the setup there is.
+      # Requires Settings -> Pages -> Source: GitHub Actions to have been set
+      # once by hand. The action can enable Pages itself, but only with a token
+      # holding admin rights -- the default GITHUB_TOKEN cannot, and asking it
+      # to fails with an unhelpful "Resource not accessible by integration".
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:

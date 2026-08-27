@@ -227,9 +227,11 @@ Things that keep the model honest:
 `.github/workflows/pages.yml` publishes the site with GitHub Actions (the
 `configure-pages` / `upload-pages-artifact` / `deploy-pages` flow, not a
 `gh-pages` branch) on every push to `main`, and on demand via
-**Actions → Publish to GitHub Pages → Run workflow**. The workflow enables Pages
-itself on its first run; if the repository's Pages source has been set by hand,
-it needs to be **Settings → Pages → Source: GitHub Actions**.
+**Actions → Publish to GitHub Pages → Run workflow**.
+
+**One-time setup:** set **Settings → Pages → Source** to **GitHub Actions**.
+The workflow cannot do this for itself — creating a Pages site needs a token
+with admin rights, and the workflow's `GITHUB_TOKEN` does not have them.
 
 Each run smoke-tests the model before it builds — a bad prior or a scheduling
 rule that stops asking for readings fails the deploy rather than shipping.
