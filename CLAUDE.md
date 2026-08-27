@@ -57,6 +57,15 @@ belongs to one steak and is reset only by that steak's own reading. Rescheduling
 all of them when one was probed pushed the others' checks into the future, ended
 the sweep after the first number, and left two steaks unlogged.
 
+**Anything `render()` repaints every second must be updated in place, not
+rewritten from a string.** The verdict's action button, the readings table and
+the steak glance rows have each hit this: a row carrying a live temperature
+changes its markup every tick, so rebuilding from a string destroys and recreates
+the element once a second and a tap lands on something that has just been
+detached. Build the skeleton when the *set* of things changes, then set
+`textContent` on the parts that move. WebKit catches this; Chromium usually
+does not.
+
 **Exactly one code path may own the action button.** `renderTrip()` owns it once
 more than one steak is in; the single-steak path must not also call
 `setAction()`. Two calls per tick with different `kind` values rebuild the

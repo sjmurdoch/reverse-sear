@@ -1311,14 +1311,14 @@ function renderPassLabel() {
 
 let lastLogHtml = null;
 /** The three at a glance: what each is at, and when each comes out. */
-let lastListHtml = null;
+let lastListKeys = null;
 function renderSteakList() {
   const host = $("steakList");
   const running = activeSteaks();
   const show = state.steaks.length > 1 || running.length > 1 ||
                state.steaks.filter(s => s.finishedAt).length > 1;
   host.classList.toggle("hidden", !show);
-  if (!show) { lastListHtml = null; return; }
+  if (!show) { lastListKeys = null; host.innerHTML = ""; return; }
 
   const opening = nextOpening();
   const order = state.steaks
@@ -1328,42 +1328,62 @@ function renderSteakList() {
     .sort((a, b) => a.at - b.at)
     .map(x => x.s.id);
 
-  const html = state.steaks.map(s => {
+  // Build the rows only when the set of steaks changes. The temperature in each
+  // row ticks every second, so rewriting the list from a string would destroy
+  // and recreate every row once a second -- and tapping a row is how a steak is
+  // selected, so that tap would land on an element that had just been detached.
+  const keys = state.steaks.map(s => s.id).join(",");
+  if (keys !== lastListKeys) {
+    lastListKeys = keys;
+    host.innerHTML = state.steaks.map((s, i) =>
+      `<div class="srow" data-s="${s.id}" style="--hue:var(--s${Math.min(i, MAX_STEAKS - 1) + 1})">
+        <i class="dot"></i>
+        <span><span class="nm"></span><br><span class="when"></span></span>
+        <span class="t"></span>
+        <span class="spill"></span>
+      </div>`).join("");
+  }
+
+  for (const s of state.steaks) {
+    const row = host.querySelector(`.srow[data-s="${s.id}"]`);
+    if (!row) continue;
     const f = fits.get(s.id);
     const t = opening ? opening.times.get(s.id) : null;
-    const ord = order.indexOf(s.id);
-    const nth = ["1st out", "2nd out", "3rd out"][ord] || "";
+    const nth = ["1st out", "2nd out", "3rd out"][order.indexOf(s.id)] || "";
 
     let temp = "—", when = "not in the oven yet", pill = "not in", cls = "";
     if (s.finishedAt) {
-      temp = (s.finalTemp == null ? "—" : s.finalTemp.toFixed(1)) + '<span class="unit"> °C</span>';
+      temp = (s.finalTemp == null ? "—" : s.finalTemp.toFixed(1)) + " °C";
       when = "out at " + fmtWallClock(s.finishedAt);
       pill = "out"; cls = "ok";
     } else if (f) {
       const live = pcts(f.samples.map(th => modelTemp(th, localMin(s))), [0.5])[0];
-      temp = live.toFixed(1) + '<span class="unit"> °C</span>';
+      temp = live.toFixed(1) + " °C";
       const ready = t && Number.isFinite(t.pullAt) ? "out " + fmtWallClock(t.pullAt) : "";
       when = [ready, nth].filter(Boolean).join(" · ");
-      const ord2 = opening && opening.orders.find(o => o.id === s.id);
+      const ord = opening && opening.orders.find(o => o.id === s.id);
       const due = opening && Date.now() >= opening.openAt;
       if (live >= s.targetC - 0.15) { pill = "take out"; cls = "act"; }
-      else if (due && ord2 && ord2.kind === "pull") { pill = "take out"; cls = "act"; }
+      else if (due && ord && ord.kind === "pull") { pill = "take out"; cls = "act"; }
       else if (due) { pill = "probe"; cls = "act"; }
       else if (f.plan.stall > 0.25) { pill = "may stall"; cls = "warn"; }
       else if (f.plan.action === "coast") { pill = "coasting"; cls = "ok"; }
       else { pill = "cooking"; cls = ""; }
     }
-    return `<div class="srow${state.current === s.id ? " on" : ""}" data-s="${s.id}" style="--hue:var(--s${Math.min(state.steaks.indexOf(s), MAX_STEAKS - 1) + 1})">
-      <i class="dot"></i>
-      <span><span class="nm">${escapeHtml(s.name)}</span><br><span class="when">${when}</span></span>
-      <span class="t">${temp}</span>
-      <span class="spill ${cls}">${pill}</span>
-    </div>`;
-  }).join("");
+    setText(row.querySelector(".nm"), s.name);
+    setText(row.querySelector(".when"), when);
+    setText(row.querySelector(".t"), temp);
+    const pillEl = row.querySelector(".spill");
+    setText(pillEl, pill);
+    const pcls = "spill " + cls;
+    if (pillEl.className !== pcls) pillEl.className = pcls;
+    const rcls = "srow" + (state.current === s.id ? " on" : "");
+    if (row.className !== rcls) row.className = rcls;
+  }
+}
 
-  if (html === lastListHtml) return;
-  lastListHtml = html;
-  host.innerHTML = html;
+function setText(el, v) {
+  if (el && el.textContent !== v) el.textContent = v;
 }
 
 function fmtWallClock(epoch) {
@@ -1706,7 +1726,7 @@ $("steakList").addEventListener("click", e => {
   const st = steakById(row.dataset.s);
   if (!st || st.finishedAt) return;
   state.current = st.id;
-  lastListHtml = null;
+  lastListKeys = null;   // force the row skeleton to rebuild
   recompute(); save(); render();
 });
 

@@ -134,6 +134,27 @@ test.describe('three steaks, one oven', () => {
     expect(stable.marked).toBe(true);
   });
 
+  test('the glance rows are not rebuilt under the chef\'s finger', async ({ app }) => {
+    // WebKit caught this too: each row carries a temperature that ticks every
+    // second, so rewriting the list from a string destroyed and recreated every
+    // row once a second -- and tapping a row is how a steak gets selected.
+    await app.seedMany(DINNER);
+    const before = await app.page.evaluate(() => {
+      const row = document.querySelector('#steakList .srow');
+      row.dataset.marked = 'yes';
+      return row.querySelector('.t').textContent;
+    });
+    await app.page.evaluate(() => new Promise(r => setTimeout(r, 2600)));  // several ticks
+    await app.drift(5);   // far enough for the reading to actually move
+
+    const after = await app.page.evaluate(() => {
+      const row = document.querySelector('#steakList .srow');
+      return { marked: row.dataset.marked === 'yes', temp: row.querySelector('.t').textContent };
+    });
+    expect(after.marked, 'the row element must survive the render tick').toBe(true);
+    expect(after.temp, 'while its temperature still updates in place').not.toBe(before);
+  });
+
   test('per-steak targets order the pulls', async ({ app }) => {
     await app.seedMany([
       { name: 'Rare', targetC: 44, readings: [[0, 5], [20, 26]] },
