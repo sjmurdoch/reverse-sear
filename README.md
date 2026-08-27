@@ -257,6 +257,7 @@ python3 web/build.py --out _site/index.html # what CI does
 can also be published directly as a Claude Artifact); `web/build.py` wraps it in
 an HTML shell and stamps the build footer to produce `web/index.html`.
 
-`web/index.html` is committed so the page can be opened straight from a clone,
-but the deployed copy is always rebuilt by CI — rerun `web/build.py` after
-editing `web/app.html`.
+`web/index.html` is generated, not committed: a checked-in copy would always
+carry the stamp of the *previous* commit, since it has to be built before the
+commit that contains it exists. Run `web/build.py` after cloning if you want to
+open the tool straight from disk; CI builds its own copy for the live site.
