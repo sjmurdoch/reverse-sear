@@ -181,3 +181,61 @@ survives a reload byte-identical; a due check that is not yet at target still
 says "check", not "pull"; the escalation to "Take it out now" fires when the
 estimate passes target; pulling records the temperature and persists; starting
 another clears every readout. No page errors in light or dark.
+
+---
+
+## Walkthrough 2 — the same cook, reporting from a real cook
+
+**Persona.** As above. This time the walkthrough started from what actually
+happened: the app said **Take it out now**, and the card it left behind read
+**40.8 °C** against a 44 °C target. The cook did exactly as instructed.
+
+**Task stage walked.** The last few minutes — the gap between the final reading
+and the pull.
+
+### 1. A check that had gone stale was read as an instruction to pull
+
+**Stage:** the final gap. **Question failed:** 3 — the cook associates "Take it
+out now" with "the steak is at temperature", and here it meant something else
+entirely.
+
+Readings at 0, 10.8, 19.0 and 28.4 min put the pull at 36.2 min. But the plan
+made at 28.4 min was still `measure`, with a check promised at 33.4 min. As the
+clock ran on, `advise()` — which floors its next check at `now + MIN_GAP_MIN` —
+slid that floor past the predicted finish, and the plan flipped to `coast` on a
+plain refit, with no new reading involved. The appointment did not move: that is
+the stickiness fix from walkthrough 1, working as designed. But the card reads a
+due appointment plus a coasting plan as "take it out now", so at 33.4 min it
+told the cook to pull — 2.8 min, and 2.6 °C, before the moment it had itself
+computed.
+
+```
+28.4 min   measure, check at 33.4    pull would be 36.2
+33.4 min   coast                     "Take it out now" — core about 40.8 °C
+36.2 min   (the moment it meant)     core about 43.4 °C
+```
+
+**Change.** When the plan flips to coasting, the promise becomes the pull time:
+`adoptCoastPull()` moves `state.dueAt` to `plan.pull`. The cook now sees the
+card change from a countdown to a check into "Coast — oven stays shut · out of
+the oven at 7:03 PM", and the button appears at the pull time. This is the one
+thing allowed to move the appointment on a refit, and it cannot walk forward
+the way walkthrough 1's bug did: the pull time comes from the posterior, which
+only moves when a reading arrives.
+
+Two regression tests in `tests/schedule.spec.js` cover it — the flip itself,
+replaying the readings above, and the adopted pull time holding still across
+refits. Without the fix the first reproduces the reported cook exactly: promised
+33.4 min against a pull time of 36.2 min.
+
+### Deliberately not changed
+
+- **`COAST_UNDERSHOOT_C` stays at 0.6 °C.** It aims deliberately low because a
+  constant-asymptote fit arrives slightly early; it was not the cause here, and
+  the 3 °C shortfall was a scheduling defect, not a calibration one.
+- **The pull is still the *median* arrival at target − 0.6 °C**, not an earlier
+  percentile. Pulling at, say, the 5th percentile would trade a symmetric error
+  for a systematic undershoot — the opposite of the complaint.
+- **A coasting plan still offers no button before its time.** Making "Out of the
+  oven" always available would let this defect recur as a slip.
+

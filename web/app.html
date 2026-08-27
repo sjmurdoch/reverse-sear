@@ -659,9 +659,33 @@ function recompute() {
   const pr = buildPriors(cfg());
   samples = fitPosterior(state.readings, pr, 20240501 + state.readings.length * 7919);
   plan = advise(samples, nowMin(), state.targetC);
+  adoptCoastPull();
 }
 
-// Called only when new information arrives, never on a plain refit.
+// The one move the clock is allowed to make.
+//
+// advise() floors its next check at now + MIN_GAP_MIN, so as the cook runs on,
+// a check that was worth taking slides past the predicted finish and the plan
+// flips from "measure" to "coast" on a plain refit -- no new reading needed.
+// The outstanding appointment is then a measurement that has become pointless,
+// and it falls *earlier* than the pull time: letting it come due showed "Take
+// it out now" several minutes and several degrees early (a 40 mm steak pulled
+// at 40.8 C against a 44 C target).  So when the plan coasts, the promise
+// becomes the pull time.
+//
+// This does not reopen the walk-forward bug that rescheduleCheck() guards
+// against: the pull time comes from the posterior, which only moves when a
+// reading arrives, so re-running this on the timer lands on the same moment.
+function adoptCoastPull() {
+  if (!plan || plan.action !== "coast" || !state.startedAt || state.finishedAt) return;
+  if (!Number.isFinite(plan.pull)) return;
+  const at = state.startedAt + plan.pull * 60000;
+  if (state.dueAt !== at) { state.dueAt = at; save(); }
+}
+
+// Called only when new information arrives, never on a plain refit -- the one
+// exception is adoptCoastPull() above, which moves the promise to the pull time
+// when the plan flips to coasting.
 //
 // The schedule has to be sticky.  advise() floors its next check at
 // now + MIN_GAP_MIN, so re-running it on a timer walks the appointment forward

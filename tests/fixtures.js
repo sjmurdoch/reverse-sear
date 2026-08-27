@@ -109,8 +109,11 @@ class App {
       ...JSON.parse(JSON.stringify(state)),
       elapsedMin: nowMin(),
       dueMin: typeof dueMin === 'function' && state.startedAt ? dueMin() : null,
-      planNext: window.plan ? plan.next : null,
-      planAction: window.plan ? plan.action : null,
+      // `plan` is a top-level `let`, so it is a global lexical binding and not a
+      // property of `window` -- reading it off `window` silently yields null.
+      planNext: plan ? plan.next : null,
+      planPull: plan ? plan.pull : null,
+      planAction: plan ? plan.action : null,
     }));
   }
 

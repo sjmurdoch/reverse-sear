@@ -96,6 +96,17 @@ bug is invisible to it — as it is to `model/test_model.py`. The regression tes
 lives in `tests/schedule.spec.js` ("does not walk forward when the app refits on
 its timer"). Test schedule behaviour in the browser, not in Python.
 
+**`adoptCoastPull()` is the one exception to that stickiness**, and it is
+load-bearing. A plain refit can flip the plan from `measure` to `coast` — the
+`now + MIN_GAP_MIN` floor eventually slides past the predicted finish — while an
+earlier measurement appointment is still outstanding. The card reads *due +
+coast* as "take it out now", so that stale appointment pulled a real steak at
+40.8 °C against a 44 °C target. When the plan coasts, `state.dueAt` therefore
+becomes `plan.pull`. That is safe where re-running `rescheduleCheck()` is not,
+because the pull time is anchored to the posterior and only moves when a reading
+arrives. `validate.py` is blind to this too: it pulls at `adv.pull_min` directly
+and never has a stale appointment to trip over.
+
 **`web/app.html` is body content only** — no `<!doctype>`, `<html>`, `<head>` or
 `<body>` tags — so it can be published directly as a Claude Artifact.
 `web/build.py` wraps it in an HTML shell and replaces the text between the

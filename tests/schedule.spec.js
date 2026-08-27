@@ -31,6 +31,47 @@ test.describe('the appointment', () => {
     expect(r.label).toMatch(/check it now|take it out/i);
   });
 
+  // Regression test for a steak pulled at 40.8 C against a 44 C target.
+  // The check the app asked for was still outstanding when the plan flipped to
+  // coasting on a plain refit -- and a due appointment plus a coasting plan is
+  // read as "take it out now".  The measurement it had promised was earlier
+  // than the pull time, so the steak came out minutes, and degrees, early.
+  test('a plan that flips to coast waits for the pull time, not the old check', async ({ app }) => {
+    await app.seed([[0, 5], [10.8, 10], [19, 22], [28.4, 35]]);
+    const seeded = await app.state();
+    expect(seeded.planAction, 'this fit still wants a reading').toBe('measure');
+    const oldCheck = seeded.dueMin;
+
+    // Run the clock up to that check. The plan flips to coast on the way.
+    await app.advance(oldCheck - seeded.elapsedMin);
+    const s = await app.state();
+    expect(s.planAction).toBe('coast');
+    expect(s.dueMin, 'the promise moves to the pull time').toBeCloseTo(s.planPull, 1);
+    expect(s.dueMin).toBeGreaterThan(oldCheck);
+
+    const r = await app.read();
+    expect(r.label).toMatch(/coast/i);
+    expect(r.action, 'nothing to press until the pull time').toBeNull();
+
+    // And when it does say to take it out, the core is at temperature.
+    await app.advance(s.dueMin - s.elapsedMin);
+    const done = await app.read();
+    expect(done.label).toMatch(/take it out now/i);
+    expect(parseFloat(done.coreNow)).toBeGreaterThan(43);
+  });
+
+  // The pull time comes from the posterior, so re-running the adoption on the
+  // timer must land on the same moment rather than walking it along.
+  test('the coast pull time does not drift once adopted', async ({ app }) => {
+    await app.seed([[0, 5], [18, 22], [30, 34], [38, 40]]);
+    expect((await app.state()).planAction).toBe('coast');
+    const promised = (await app.state()).dueAt;
+    for (let i = 0; i < 3; i++) {
+      await app.advance(0.5);
+      expect((await app.state()).dueAt).toBe(promised);
+    }
+  });
+
   test('is reset by a reading, and by changing the steak', async ({ app }) => {
     await app.seed([[0, 5], [14, 12]], { elapsed: 20 });
     const first = (await app.state()).dueAt;
