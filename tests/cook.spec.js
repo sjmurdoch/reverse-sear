@@ -94,6 +94,56 @@ test.describe('logging readings', () => {
     await expect(app.page.locator('#readTemp')).toBeFocused();
   });
 
+  // Walkthrough 3. The fit has a Gaussian likelihood with sigma 0.8 C, so a
+  // wildly inconsistent reading is not downweighted -- it takes over. "433" for
+  // 43.3 moved the plan to "take it out now" three degrees early; "4.3" for 43
+  // sent the cook away for 30 minutes with the steak four minutes from done.
+  test('a reading hotter than the oven is refused, and can be fixed in the box', async ({ app }) => {
+    await app.seed([[0, 5], [14, 12], [26, 22]]);
+    const before = await app.state();
+
+    await app.page.fill('#readTemp', '433');
+    await app.page.click('#logBtn');
+    await app.settle();
+
+    const s = await app.state();
+    expect(s.readings, 'nothing may be recorded').toEqual(before.readings);
+    expect(s.dueAt, 'and the plan must not move').toBe(before.dueAt);
+    const r = await app.read();
+    expect(r.warn).toMatch(/at or above the oven \(125 °C\)/);
+    expect(await app.page.inputValue('#readTemp'), 'the typed value stays, to be corrected').toBe('433');
+    await expect(app.page.locator('#readTemp')).toBeFocused();
+
+    await app.log(43.3);
+    expect((await app.state()).readings.length).toBe(4);
+    expect((await app.read()).warn, 'the refusal clears once a reading lands').toBe('');
+  });
+
+  test('a reading far below the last one is questioned, not refused', async ({ app }) => {
+    await app.seed([[0, 5], [14, 12], [26, 22]]);
+    await app.log(2.2);                       // "22" typed as "2.2"
+
+    expect((await app.state()).readings.length, 'a surprising reading is still information').toBe(4);
+    const r = await app.read();
+    expect(r.warn).toMatch(/2\.2 °C is 19\.8 °C below your last reading of 22 °C/);
+    expect(r.warn).toMatch(/cannot cool in the oven/);
+    expect(r.warn).toMatch(/delete the row/);
+
+    // The query is derived from the readings, so removing the row clears it.
+    const dels = await app.page.$$('#log button.del');
+    await dels[dels.length - 1].click();
+    await app.settle();
+    expect((await app.read()).warn).toBe('');
+  });
+
+  test('the query survives a reload, because it is not remembered but derived', async ({ app }) => {
+    await app.seed([[0, 5], [14, 12], [26, 22]]);
+    await app.log(2.2);
+    await app.page.reload();
+    await app.settle();
+    expect((await app.read()).warn).toMatch(/below your last reading/);
+  });
+
   test('each reading is scored against the fitted curve', async ({ app }) => {
     await app.seed([[0, 5], [14, 12], [26, 22]]);
     const rows = await app.rows();

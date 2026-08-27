@@ -23,6 +23,21 @@ test.describe('setting up a cook', () => {
     expect((await app.read()).dockHidden).toBe(true);
   });
 
+  // The same slip as a mistyped reading, at the one moment it anchors the whole
+  // cook: t0 is where every fitted curve starts.
+  test('a starting temperature hotter than the oven does not start a cook', async ({ app }) => {
+    await app.page.fill('#startTemp', '433');
+    await app.page.click('#startBtn');
+    await app.settle();
+    expect((await app.state()).startedAt, 'the cook must not start').toBeFalsy();
+    expect((await app.read()).startWarn).toMatch(/at or above the oven \(125 °C\)/);
+    await expect(app.page.locator('#startTemp')).toBeFocused();
+
+    await app.start(4.3);
+    expect((await app.state()).startedAt).toBeTruthy();
+    expect((await app.read()).startWarn).toBe('');
+  });
+
   test('the prompt names the action it wants', async ({ app }) => {
     const r = await app.read();
     expect(r.label).toMatch(/set up/i);

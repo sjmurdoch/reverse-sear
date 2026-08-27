@@ -239,3 +239,143 @@ refits. Without the fix the first reproduces the reported cook exactly: promised
 - **A coasting plan still offers no button before its time.** Making "Out of the
   oven" always available would let this defect recur as a slip.
 
+---
+
+## Walkthrough 3 — the same cook, a wet steak in an oven that was not ready
+
+**Persona.** As walkthrough 1: 44 °C on the probe as it leaves the oven, a sauce
+and potatoes competing for attention, wet hands, four seconds of attention at a
+time.
+
+**Scenario.** A 1.1 kg, 40 mm steak taken straight from the bag — not patted dry
+— into an oven switched on four minutes earlier. The dial says 125 °C; the air
+is at 70 °C and climbing about 2.2 °C a minute. This is the regime the tool's
+own explanation warns about: while the surface is genuinely wet the whole steak
+is pinned near the oven's wet-bulb temperature, which is 38.5 °C for a dry
+125 °C oven and lower still while it is preheating — below the 44 °C target.
+
+**How it was walked.** Ground truth came from `model/steak.py` with those
+settings; the page was driven in a headless iPhone context against a fake clock,
+probing the simulated core at exactly the minute the app asked for a reading and
+typing what the probe said, plus placement noise. So the cook did as told,
+throughout, and the app got what a real probe would have given it.
+
+**Task stages walked.** Set up and start → the first check, before anything is
+fitted → three more checks as the fit catches up → coast → take it out. Then the
+slips this persona actually makes, from the same mid-cook state.
+
+**The cook itself came out right,** which is worth recording. The prior was badly
+wrong at the start — it put 44 °C at 25–79 min when the truth was 64 — and the
+schedule recovered: five checks, pull at 63.6 min, true core 44.0 °C. The
+walkthrough-2 coast fix held in a regime nothing had tested it in.
+
+### 1. A mistyped reading is accepted without question, and silently changes the plan
+
+**Stage:** logging. **Question failed:** 1 — the cook is still trying to achieve
+the right result, but the app has quietly changed what it is aiming at, and
+nothing on the card says so.
+
+A number pad, wet hands, one hand on a pan. The decimal point is the whole
+message. From the state above (true core 40.2 °C, four good readings, five
+minutes from the pull):
+
+```
+typed "433" for 43.3   ->  "Take it out now", card reads "core about 43.5 °C"
+                           true core 40.2 °C: a steak pulled 3.5 C short
+typed "4.3"  for 43     ->  "may never reach target", next look in 30 min
+                           true core would be 57 C by then: a steak ruined
+```
+
+Neither is caught by the fit, and that is not an accident: the likelihood is
+Gaussian with `sigma_obs` 0.8 °C, so a reading 36 °C out is a 45-sigma event and
+the posterior does not downweight it — it contorts to accommodate it. The only
+trace is the residual column in the readings table, two cards down, which showed
+`+389.5`.
+
+The `4.3` direction is the dangerous one, and it is dangerous in the way this
+tool is supposed to prevent: it does not merely mislead, it sends the cook away
+for half an hour at the exact moment the steak needs watching.
+
+**Change.** Refuse what is physically impossible; question — without refusing —
+what is merely improbable.
+
+- A reading at or above the oven temperature is refused at the input: the core
+  cannot reach the oven air, let alone pass it. The message names the oven
+  setting, and the typed value stays in the box, because it is one digit away
+  from being right and clearing it would cost a second probe. The same check
+  guards the starting temperature, which anchors every fitted curve.
+- A reading 3 °C or more below the one before it is **accepted** and queried:
+  "4.3 °C is 35.9 °C below your last reading of 40.2 °C, and the core cannot cool
+  in the oven. If that was a mistype, delete the row in Readings; if the earlier
+  reading was off-centre, carry on." The query is derived from the readings
+  rather than remembered at the keystroke, so it survives a reload and clears
+  itself the moment the row is deleted.
+
+The asymmetry is deliberate. A probe placed off the thermal centre reads *high*,
+so a lower reading than the last one can be perfectly honest — and a reading
+that disagrees with the model is the most valuable one there is. Refusing it
+would be worse than the disease.
+
+### 2. The headline estimate hid its own uncertainty at the moment it was worst
+
+**Stage:** arriving at the first check. **Question failed:** 1, and 3 — a number
+this confident-looking argues against the very probe the card is asking for.
+
+At the first check the card said **"Check it now · core about 23.6 °C"**. The
+true core was 16.2 °C, and the app's own 5–95% interval was 6.4–41.3 °C: before
+the second reading, that number is almost entirely prior. A cook who glances,
+reads "about 24", and thinks "nearly there, I'll leave it" has been misled by a
+card that knew better — the spread was on the stats card, one down, in 11 px
+type.
+
+**Change.** When the 5–95% interval is wider than 6 °C the verdict line shows it:
+**"core 6–41 °C, best guess 23.6"**. Once the readings pin it down — 2.4 °C wide
+at the last check of this cook — it goes back to "core about 43.4 °C". Nothing
+was added to the stats card; this is the same number, told honestly in the place
+that gets read.
+
+### 3. The first check of a cook was called a "mid-course check"
+
+**Stage:** the first screen after Start. **Question failed:** 3.
+
+Pressing **Start cook** produced: *"Mid-course check: the prediction is still
+loose enough that a reading now pays for the heat it costs."* There is no course
+yet — it is the first thing the tool ever says, and it describes a situation the
+cook is not in. (It comes from the `MAX_BLIND_FRACTION` branch, which caps the
+first check at 55% of the predicted time; the cap is right, the words are not.)
+
+**Change.** While there is only the starting reading the card says what is
+actually true: *"Nothing is fitted yet — this is the prior for a steak this size
+in an oven this hot. The first check is the one that turns it into a
+prediction."* `advise()` is untouched, so the parity fixture is untouched: this
+is `render()` choosing better words for a state it can see.
+
+### Deliberately not changed
+
+- **No robust likelihood.** The principled fix for finding 1 is an observation
+  model with tails — a Student-t, or a Gaussian mixture with a small outlier
+  weight — so that an impossible reading is downweighted instead of dominating.
+  It is the right answer and it is not a walkthrough-sized change: it moves every
+  posterior, so `COAST_UNDERSHOOT_C`, the parity fixture and the closed-loop
+  calibration in `validate.py` would all have to be re-derived. Recorded here as
+  a proposal rather than slipped in behind a usability fix.
+- **No confirmation dialog on a surprising reading.** The persona has four
+  seconds and wet hands, and the surprising reading is usually the true one. The
+  query is a line of text, not a gate.
+- **Nothing auto-deleted.** The app never removes a reading the cook typed; it
+  says what it doubts and points at the delete button.
+- **The first blind gap stays long.** 23.6 minutes before the first check looks
+  bold when the prior is this wrong, but it was right here — the check landed
+  with 40 minutes still to run and the fit caught up in one reading. The
+  `MAX_BLIND_FRACTION` cap is doing its job.
+
+### Verification
+
+The cook above, replayed against `model/steak.py` in a headless iPhone context:
+five checks, pull at 63.6 min, true core 44.0 °C, no page errors. Regression
+tests for all three findings: an impossible reading refused and correctable in
+place, an improbable one accepted-and-queried and the query clearing when the row
+goes and surviving a reload, the same guard on the starting temperature, the wide
+and narrow forms of the headline estimate, and the first-check wording appearing
+and then going away.
+

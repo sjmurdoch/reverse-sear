@@ -245,6 +245,11 @@
     border-top: 1px solid var(--line);
   }
   .dock .inner { max-width: 720px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  .dockwarn {
+    max-width: 720px; margin: 0 auto 8px; font-size: 13px; color: var(--ember);
+    text-wrap: pretty;
+  }
+  .dockwarn:empty { display: none; }
   .dock .labelrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
   .chips { display: flex; gap: 4px; }
   .chips button {
@@ -359,6 +364,7 @@
         </div>
         <button class="primary" id="startBtn" type="button">Start cook</button>
       </div>
+      <p class="dockwarn" id="startWarn" role="status"></p>
       <p class="note">Probe the raw steak, type that number, and press <strong>Start cook</strong> as the steak
         goes into the oven — that press is the clock's zero.</p>
       <button class="ghost" id="resetBtn" type="button">Reset everything</button>
@@ -389,6 +395,7 @@
 </div>
 
 <div class="dock hidden" id="dock">
+  <p class="dockwarn" id="dockWarn" role="status"></p>
   <div class="inner">
     <div class="field">
       <div class="labelrow">
@@ -617,6 +624,49 @@ function advise(samples, nowMin, target) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Reading plausibility
+ *
+ * A probe reading is the one number the whole plan rests on, and it is typed
+ * with wet hands on a number pad while something else is burning.  Two slips
+ * are easy: a lost decimal point ("433" for 43.3) and a misplaced one ("4.3").
+ * Neither is caught by the fit -- the likelihood is Gaussian with sigma 0.8 C,
+ * so a wildly inconsistent reading does not get downweighted, it takes over.
+ * A 433 C reading pulled the steak 3 C early; a 4.3 C reading sent the cook
+ * away for 30 minutes with the steak 4 minutes from done.
+ *
+ * So: refuse what is physically impossible, and question -- without refusing --
+ * what is merely very unlikely.  The core cannot cool in a hot oven, but a
+ * probe placed off-centre reads high, so a *lower* reading than the last one
+ * can be honest.  That case gets a note and a pointer at the delete button,
+ * never a rejection: the reading that disagrees with the model is exactly the
+ * one worth having.
+ * ------------------------------------------------------------------ */
+const DROP_QUERY_C = 3.0;   // a reading this far below the last one gets queried
+
+// Returns a reason to refuse `val`, or "" to accept it.
+function readingProblem(val, ovenC) {
+  if (!Number.isFinite(val)) return "Type the core temperature the probe is showing.";
+  if (Number.isFinite(ovenC) && val >= ovenC) {
+    return `${val} °C is at or above the oven (${ovenC} °C). The core cannot get there — check the number.`;
+  }
+  if (val < -30) return `${val} °C is not a steak — check the number.`;
+  return "";
+}
+
+// A reading far below the one before it, described for the cook.  Computed from
+// the readings themselves rather than remembered at the keystroke, so it
+// survives a reload and clears itself the moment the row is deleted.
+function suspectDrop(readings) {
+  if (readings.length < 2) return "";
+  const last = readings[readings.length - 1], prev = readings[readings.length - 2];
+  const drop = prev.temp - last.temp;
+  if (drop < DROP_QUERY_C) return "";
+  return `${last.temp} °C is ${drop.toFixed(1)} °C below your last reading of ${prev.temp} °C, ` +
+    `and the core cannot cool in the oven. If that was a mistype, delete the row in Readings; ` +
+    `if the earlier reading was off-centre, carry on.`;
+}
+
+/* ------------------------------------------------------------------ *
  * State
  * ------------------------------------------------------------------ */
 const STORE = "reverse-sear-pilot-v1";
@@ -632,6 +682,7 @@ let state = {
   readings: []               // [{ t: minutes, temp: °C }]
 };
 let readingAge = 0;          // minutes: how long ago the reading in the box was taken
+let dockNote = "";           // a refused reading, held until an accepted one replaces it
 let samples = null, plan = null;
 
 function load() {
@@ -759,6 +810,9 @@ function render() {
   const active = started && !finished && !isStale();
 
   $("dock").classList.toggle("hidden", !active);
+  // A refusal outranks a query: the cook has a number to correct either way.
+  const warn = dockNote || (started && !finished ? suspectDrop(state.readings) : "");
+  if ($("dockWarn").textContent !== warn) $("dockWarn").textContent = warn;
   // Before the first reading these are three empty cards between "Set up your
   // steak" and the form that does it, pushing the form off the bottom of the
   // phone.  Show them once there is something in them.
@@ -868,10 +922,15 @@ function render() {
   // an overdue steak, so say it rather than blanking the line.
   if (due || pastTarget) {
     const late = state.dueAt ? Math.max(0, (Date.now() - state.dueAt) / 60000) : 0;
-    $("verdictAt").innerHTML = late > 0.5
-      ? '<span class="over">' + Math.round(late) + " min past the planned check</span>  ·  core about " +
-        nMid.toFixed(1) + " °C"
+    // Before the second reading this number is nearly all prior and can be ten
+    // degrees out. A bare "core about 24 °C" reads as knowledge; say how little
+    // is known, or the cook skips the probe it is asking for.
+    const core = nHi - nLo > 6
+      ? "core " + nLo.toFixed(0) + "–" + nHi.toFixed(0) + " °C, best guess " + nMid.toFixed(1)
       : "core about " + nMid.toFixed(1) + " °C";
+    $("verdictAt").innerHTML = late > 0.5
+      ? '<span class="over">' + Math.round(late) + " min past the planned check</span>  ·  " + core
+      : core;
   } else {
     $("verdictAt").textContent =
       (plan.action === "coast" ? "out of the oven at " : "at ") + fmtWall(promised) +
@@ -882,6 +941,11 @@ function render() {
       ? "The estimate has already reached your target. Take it out, or probe it now if you want to be sure."
     : due && plan.action === "measure"
       ? "This is the check it asked for. Probe the centre, put the steak straight back, and log the number."
+    // With one reading nothing is fitted yet: every number on this card is the
+    // prior for a steak this size. Saying so beats calling it a "mid-course
+    // check" before there is a course.
+    : state.readings.length < 2 && plan.action === "measure"
+      ? "Nothing is fitted yet — this is the prior for a steak this size in an oven this hot. The first check is the one that turns it into a prediction."
       : plan.why;
 
   setAction(actsEl, pullNow ? "out" : "", pullNow ? '<button class="primary" type="button">Out of the oven</button>' : "", finishCook);
@@ -1125,6 +1189,7 @@ function startAnother() {
   state.readings = [];
   samples = null; plan = null;
   readingAge = 0;
+  dockNote = "";
   releaseWakeLock();
   save();
   $("setup").open = true;
@@ -1146,7 +1211,9 @@ function finishCook() {
 $("startBtn").addEventListener("click", () => {
   readSetup();
   const t0 = parseFloat($("startTemp").value);
-  if (!Number.isFinite(t0)) { $("startTemp").focus(); return; }
+  const badStart = readingProblem(t0, state.ovenC);
+  if (badStart) { $("startWarn").textContent = badStart; $("startTemp").focus(); return; }
+  $("startWarn").textContent = "";
   state.startedAt = Date.now();
   state.finishedAt = null;
   state.finalTemp = null;
@@ -1169,7 +1236,10 @@ $("ageChips").addEventListener("click", e => {
 
 $("logBtn").addEventListener("click", () => {
   const val = parseFloat($("readTemp").value);
-  if (!Number.isFinite(val)) { $("readTemp").focus(); return; }
+  const bad = readingProblem(val, state.ovenC);
+  // Leave the typed value in the box: it is a digit away from being right, and
+  // clearing it would cost a second probe.
+  if (bad) { dockNote = bad; render(); $("readTemp").focus(); return; }
   // You probe the steak, put it back, wipe your hands, then type. Timestamping
   // the typing rather than the probing makes the steak look slower than it is
   // and pulls it late, so let the reading be backdated.
@@ -1177,6 +1247,7 @@ $("logBtn").addEventListener("click", () => {
   const t = Math.max(last + 0.1, nowMin() - readingAge);
   state.readings.push({ t, temp: val });
   state.readings.sort((a, b) => a.t - b.t);
+  dockNote = "";
   $("readTemp").value = "";
   $("readTemp").blur();
   readingAge = 0;
@@ -1191,6 +1262,7 @@ $("log").addEventListener("click", e => {
   const b = e.target.closest("button.del");
   if (!b) return;
   state.readings.splice(parseInt(b.dataset.i, 10), 1);
+  dockNote = "";
   recompute(); rescheduleCheck(); save(); render();
 });
 

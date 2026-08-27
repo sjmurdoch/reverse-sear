@@ -138,13 +138,43 @@ test.describe('what the card says', () => {
     expect(r.action, 'not time to take it out yet').toBeNull();
   });
 
+  // Walkthrough 3: at the first check the estimate is nearly all prior -- it was
+  // 7 C out, on a 6-41 C interval -- and "core about 23.6 °C" reads as knowledge.
+  test('the due card shows how little it knows, while it knows little', async ({ app }) => {
+    await app.start(5);
+    const due = (await app.state()).dueMin;
+    await app.drift(due + 0.3);
+    const wide = await app.read();
+    expect(wide.at, 'a wide posterior must show its width').toMatch(/core \d+–\d+ °C, best guess \d+\.\d/);
+
+    // Once it is pinned down, the range is noise: show the number.
+    await app.seed([[0, 5], [14, 12], [26, 22], [38, 31]]);
+    const s = await app.state();
+    await app.drift(s.dueMin - s.elapsedMin + 0.3);
+    expect((await app.read()).at).toMatch(/core about \d+\.\d °C/);
+  });
+
+  test('the first check of a cook is not called a mid-course check', async ({ app }) => {
+    await app.start(5);
+    const r = await app.read();
+    expect(r.why).not.toMatch(/mid-course/i);
+    expect(r.why).toMatch(/nothing is fitted yet/i);
+
+    // And once there is something to fit, it stops saying so.
+    await app.advance(14);
+    await app.log(12);
+    expect((await app.read()).why).not.toMatch(/nothing is fitted yet/i);
+  });
+
   test('reports how late you are, measured against what it promised', async ({ app }) => {
     await app.seed([[0, 5], [14, 12]], { elapsed: 20 });
     const s = await app.state();
     await app.drift(s.dueMin - s.elapsedMin + 4);      // four minutes past the check
     const r = await app.read();
     expect(r.at).toMatch(/[34] min past the planned check/);
-    expect(r.at).toMatch(/core about \d+\.\d °C/);
+    // Either form of the estimate -- on two readings the posterior is still
+    // wide enough that the card shows its range rather than a point value.
+    expect(r.at).toMatch(/core (about \d+\.\d °C|\d+–\d+ °C, best guess \d+\.\d)/);
   });
 
   test('escalates to "take it out" once the estimate passes target', async ({ app }) => {

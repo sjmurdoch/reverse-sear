@@ -93,6 +93,8 @@ class App {
       at: document.getElementById('verdictAt').textContent.trim(),
       why: document.getElementById('verdictWhy').textContent.trim(),
       wake: document.getElementById('wakeNote').textContent.trim(),
+      warn: document.getElementById('dockWarn').textContent.trim(),
+      startWarn: document.getElementById('startWarn').textContent.trim(),
       action: (document.getElementById('verdictActs').querySelector('button') || {}).textContent || null,
       coreNow: document.getElementById('statNow').textContent.trim(),
       hit: document.getElementById('statHit').textContent.trim(),
