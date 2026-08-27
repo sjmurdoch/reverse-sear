@@ -3,6 +3,7 @@ name: Publish to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -16,43 +17,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  model:
+    name: model tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: python -m pip install --quiet numpy
+      - name: Physics, fitter and scheduling rule
+        run: python -m unittest discover -s model -t model -p "test_*.py" -v
 
-      - name: Check the model still runs
-        run: |
-          python -m pip install --quiet numpy
-          python - <<'PY'
-          import sys
-          sys.path.insert(0, 'model')
-          from fit import advise, default_priors, fit
+  browser:
+    name: browser tests (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # WebKit is the browser that matters -- the app ships to iPhone Safari.
+        # Chromium runs alongside it to catch anything that is a real bug rather
+        # than an engine difference.
+        project: [iphone-webkit, iphone-chromium]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m pip install --quiet numpy
+      - run: npm ci
+      - name: Install browser
+        run: npx playwright install --with-deps ${{ matrix.project == 'iphone-webkit' && 'webkit' || 'chromium' }}
+      - name: The page under an iPhone viewport
+        run: npx playwright test --project=${{ matrix.project }}
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-${{ matrix.project }}
+          path: playwright-report/
+          retention-days: 14
 
-          pr = default_priors(1.0, 0.040, 125.0)
-          assert 30 < pr.tau_median < 150, pr.tau_median
-          post = fit([0.0, 20.0, 30.0], [5.0, 18.8, 29.0], pr)
-          a = advise(post, 30.0, 44.0)
-          assert 35 < a.hit_time[1] < 65, a.hit_time
-          assert a.next_check_min > 30.0
-          print(f"ok: tau prior {pr.tau_median:.0f} min, reaches 44 C at {a.hit_time[1]:.0f} min")
-          PY
-
+  build:
+    needs: [model, browser]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Build the page
         run: |
           python web/build.py --out _site/index.html
           touch _site/.nojekyll
-
       # Requires Settings -> Pages -> Source: GitHub Actions to have been set
       # once by hand. The action can enable Pages itself, but only with a token
       # holding admin rights -- the default GITHUB_TOKEN cannot, and asking it
       # to fails with an unhelpful "Resource not accessible by integration".
       - uses: actions/configure-pages@v5
-
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

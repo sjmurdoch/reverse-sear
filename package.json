@@ -1,0 +1,18 @@
+{
+  "name": "reverse-sear-pilot",
+  "private": true,
+  "description": "Tests for the Reverse Sear Pilot page",
+  "scripts": {
+    "test": "playwright test --project=iphone-webkit",
+    "test:chromium": "playwright test --project=iphone-chromium",
+    "test:all": "playwright test",
+    "test:headed": "playwright test --project=iphone-webkit --headed",
+    "report": "playwright show-report",
+    "build": "python3 web/build.py",
+    "test:model": "python3 -m unittest discover -s model -t model -p \"test_*.py\"",
+    "parity:update": "python3 tools/parity.py --write"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

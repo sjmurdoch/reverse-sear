@@ -10,21 +10,28 @@ derivation; `COGNITIVE-WALKTHROUGHS.md` records usability walkthroughs.
 ## Commands
 
 ```bash
-pip install numpy                 # the only dependency
+pip install numpy && npm ci                    # numpy and @playwright/test
+npx playwright install --with-deps webkit      # the browser that matters
+
+npm test                          # the page, WebKit + iPhone 14 Pro viewport
+npm run test:chromium             # fallback where WebKit cannot be downloaded
+npm run test:model                # physics, fitter and scheduling rule (Python)
+npx playwright test -g "does not walk forward"   # one test
 
 python3 model/steak.py            # ground-truth simulator, one default cook
 python3 model/fit.py              # priors and a no-data prediction
-python3 model/validate.py 40      # closed-loop validation over 40 random cooks (slow: ~4 s each)
+python3 model/validate.py 40      # wide closed-loop validation (slow: ~4 s per cook)
 
 python3 web/build.py              # regenerate web/index.html from web/app.html
 python3 web/build.py --out _site/index.html    # what CI does
+npm run parity:update             # after changing model/fit.py -- see Parity below
 ```
 
-There is no test runner and no linter. The checks that exist are
-`model/validate.py` and the smoke test inlined in
-`.github/workflows/pages.yml`, which asserts bounds on the prior and on
-`advise()` — **changing the priors or the scheduling rule can fail the deploy**,
-which is deliberate.
+No linter. `.github/workflows/pages.yml` gates the deploy on the Python tests
+and on both browser projects, so **changing the priors or the scheduling rule
+can fail the deploy** — that is deliberate. `tests/README.md` describes the
+suite; the Playwright config rebuilds and serves the page itself, so tests never
+run against a stale build.
 
 ## Architecture
 
@@ -47,16 +54,14 @@ Shared constants that must match: `GUARD_C` 2.0, `MIN_GAP_MIN` 5,
 `MAX_GAP_MIN` 30, `MAX_BLIND_FRACTION` 0.55, `COAST_UNDERSHOOT_C` 0.6,
 `sigma_obs` 0.8, `tau_log_sd` 0.35, `lag_median` 6.
 
-After changing either side, cross-check them on the same input — they should
-agree to MCMC noise (a couple of tenths of a minute on the predicted finish):
+`tests/parity.spec.js` enforces this: deterministic quantities exactly, posterior
+summaries within a band. After changing `model/fit.py`, regenerate the fixture
+with `npm run parity:update` and re-run the browser tests.
 
-```bash
-python3 -c "
-import sys; sys.path.insert(0,'model')
-from fit import *
-p=fit([0,20,30],[5.0,18.8,29.0],default_priors(1.0,0.040,125.0))
-a=advise(p,30.0); print([round(x,1) for x in a.hit_time], a.action, round(a.next_check_min,1))"
-```
+One deliberate asymmetry: for a `coast`, the JS puts the pull time in `next`
+(the card counts down to it) while Python keeps the unused safe-check time in
+`next_check_min` and the pull in `pull_min`. Compare `pull` for coast, `next`
+for measure.
 
 ### Three layers
 
@@ -79,7 +84,7 @@ the crust dries, so a constant-asymptote exponential arrives slightly early.
 Any change to the model form invalidates this number — re-derive it by running
 `validate.py` and reading the mean error, which should sit near zero.
 
-**The schedule must be sticky, and `validate.py` cannot catch it if it isn't.**
+**The schedule must be sticky, and only a browser test can catch it if it isn't.**
 `advise()` floors its next check at `now + MIN_GAP_MIN`, so re-running it on a
 timer walks the appointment forward a few minutes at a time and the countdown
 never reaches zero. The app therefore stores the promised moment in
@@ -87,7 +92,9 @@ never reaches zero. The app therefore stores the promised moment in
 (reading logged or deleted, cook started, a setup field edited) — never on a
 plain refit. `validate.py` calls `advise` exactly once per measurement and jumps
 straight to `next_check_min`, so it is sticky by construction and this class of
-bug is invisible to it. Test schedule behaviour in the browser, not in Python.
+bug is invisible to it — as it is to `model/test_model.py`. The regression test
+lives in `tests/schedule.spec.js` ("does not walk forward when the app refits on
+its timer"). Test schedule behaviour in the browser, not in Python.
 
 **`web/app.html` is body content only** — no `<!doctype>`, `<html>`, `<head>` or
 `<body>` tags — so it can be published directly as a Claude Artifact.
@@ -110,30 +117,25 @@ only touches the DOM when the button actually changes.
 
 ## Testing the page
 
-No committed harness; drive it with Playwright against a local static server.
-Chromium is pre-installed but the version Playwright expects may not be, so pin
-the executable:
+WebKit is the primary target — the app ships to iPhone Safari — and is what
+`npm test` and the CI gate use. `iphone-chromium` is a fallback for sandboxes
+that cannot download WebKit (the Playwright CDN is blocked by egress policy in
+some environments); it pins `/opt/pw-browsers/chromium` when that exists. A
+result from the Chromium project is not evidence about Safari — say which
+project actually ran.
 
-```js
-chromium.launch({ executablePath: '/opt/pw-browsers/chromium' })
-```
+**Never simulate time by moving `state.startedAt`.** It shifts every quantity
+derived from it and hides exactly the bugs worth catching. The `app` fixture in
+`tests/fixtures.js` installs a controllable `Date.now()` (persisted in
+`sessionStorage` so it survives a reload) and exposes:
 
-```bash
-python3 -m http.server 8777 --bind 127.0.0.1   # serve web/ after building
-```
+- `app.advance(min)` — clock moves and the app refits, as on its 60 s timer
+- `app.drift(min)` — clock moves with no refit, as between those timers
+- `app.seed([[0, 5], [14, 12]])` — drop straight into a mid-cook state
+- `app.read()` / `app.state()` / `app.rows()` — what the card says, the internal
+  state, the readings table
 
-Time-dependent behaviour needs an advancing clock, not a moved start time —
-shifting `state.startedAt` also shifts every derived quantity and hides exactly
-the bugs you are looking for:
-
-```js
-await page.addInitScript(() => {
-  window.__skew = 0;
-  const real = Date.now;
-  Date.now = () => real() + window.__skew;
-});
-// then: await page.evaluate(() => { window.__skew += 6*60000; recompute(); render(); });
-```
+Every test fails if the page logged an uncaught or console error.
 
 ## Deployment
 

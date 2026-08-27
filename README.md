@@ -258,6 +258,21 @@ The page carries a discreet footer stamping the commit it was built from and
 that commit's timestamp, linked to the commit on GitHub, so what is live is
 always identifiable.
 
+## Tests
+
+```bash
+pip install numpy && npm ci
+npx playwright install --with-deps webkit
+
+npm test              # the page under WebKit at an iPhone 14 Pro viewport
+npm run test:model    # physics, fitter and scheduling rule
+```
+
+98 tests: 67 against the page in the browser, 31 against the Python model.
+`tests/README.md` describes what each file covers. WebKit is the primary target
+since the app ships to iPhone Safari; CI runs WebKit and Chromium and gates the
+deploy on both, alongside the Python suite.
+
 ## Running the modelling code
 
 ```bash
