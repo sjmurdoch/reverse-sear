@@ -54,7 +54,7 @@ test.describe('closing the app and coming back', () => {
     expect(r.label).toMatch(/out of the oven/i);
     expect(r.clock).toMatch(/^\d+\.\d °C$/);
     expect(r.at).toMatch(/after \d+ min/);
-    expect(r.at).toMatch(/pulled at \d{1,2}:\d{2}/);
+    expect(r.at).toMatch(/out at \d{1,2}:\d{2}/);
     expect(r.why).toMatch(/rest/i);
     expect(r.dockHidden, 'no more readings once it is out').toBe(true);
     expect(s.finishedAt).toBeTruthy();
@@ -72,9 +72,33 @@ test.describe('closing the app and coming back', () => {
     await app.page.reload();
     await app.settle();
     const after = await app.read();
+    // The rest clock is live, so compare what is meant to be fixed.
+    const fixed = x => x.split('  ·  resting')[0];
     expect(after.clock).toBe(before.clock);
-    expect(after.at).toBe(before.at);
+    expect(fixed(after.at)).toBe(fixed(before.at));
     expect(after.coreNow).toBe(before.coreNow);
+  });
+
+  // Walkthrough 5. The task does not end at the oven: this persona still has to
+  // rest it and sear it, and a card frozen on the moment of the pull shows no
+  // progress at the one stage where the only question is how long it has been
+  // out.
+  test('the finished card counts the rest', async ({ app }) => {
+    await app.seed([[0, 5], [16, 20], [28, 32]]);
+    await app.advance(40);
+    await app.page.click('#verdictActs button');
+    await app.settle();
+    expect((await app.read()).at, 'nothing to say in the first minute').not.toMatch(/resting/);
+
+    await app.advance(9);
+    const r = await app.read();
+    expect(r.at).toMatch(/resting 9 min/);
+    expect(r.at, 'and what it says about the cook itself does not move').toMatch(/after \d+ min/);
+    expect(r.clock, 'nor does the temperature it recorded').toMatch(/^\d+\.\d °C$/);
+
+    await app.page.reload();
+    await app.settle();
+    expect((await app.read()).at, 'and it survives being closed and reopened').toMatch(/resting 9 min/);
   });
 
   test('a finished cook is never treated as stale', async ({ app }) => {

@@ -365,6 +365,35 @@ test.describe('the oven as a whole, not the steak on screen', () => {
     expect(s.current, 'and the card stays with the cook in progress').toBe(ids[0]);
   });
 
+  // Walkthrough 5, per steak: an estimate too loose to state is too loose to
+  // take a steak out on, and with three in the oven that decision is made once
+  // per steak rather than once per card.
+  test('a steak whose estimate straddles the target is probed, not called out', async ({ app }) => {
+    await app.seedMany([
+      { name: 'Ribeye', thickMm: 48, targetC: 44, readings: [[0, 5], [14, 12]] },
+      { name: 'Sirloin', thickMm: 28, targetC: 44, readings: [[0, 12], [16, 34], [28, 43]] },
+    ], { elapsed: 28 });
+    await app.advance(30);
+
+    const spread = await app.page.evaluate(() => state.steaks.map(s => {
+      const f = fits.get(s.id);
+      const p = pcts(f.samples.map(th => modelTemp(th, localMin(s))), [0.05, 0.5, 0.95]);
+      return { lo: p[0], mid: p[1], hi: p[2] };
+    }));
+    const [ribeye, sirloin] = spread;
+    expect(ribeye.mid, 'the state under test: the median has passed target').toBeGreaterThan(44);
+    expect(ribeye.lo, 'while the interval still straddles it').toBeLessThan(44);
+    expect(ribeye.hi - ribeye.lo).toBeGreaterThan(6);
+    expect(sirloin.lo, 'and the other one is certain').toBeGreaterThan(44);
+
+    const pills = (await app.rows2()).map(x => x.pill);
+    expect(pills[0], 'the vague one wants the probe, not the pull').toBe('probe');
+    expect(pills[1]).toBe('take out');
+    const r = await app.read();
+    expect(r.label).toMatch(/take out sirloin/i);
+    expect(r.label).not.toMatch(/ribeye/i);
+  });
+
   test('starting another cook clears the whole oven', async ({ app }) => {
     // It cleared the selected steak only. The other two stayed marked "out" for
     // ever, and a steak that has started shows no starting-temperature box, so

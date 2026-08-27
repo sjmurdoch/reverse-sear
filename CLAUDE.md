@@ -190,6 +190,17 @@ tokens on bare `:root` and redefined for both `prefers-color-scheme: dark` and
 `[data-theme="dark"]` — never declare a colour only inside a media or
 `[data-theme]` block.
 
+**A vague estimate may ask for a probe; it may never order the pull.**
+`SPREAD_WIDE_C` (6 °C) governs two decisions that have to agree: whether the
+card states a point estimate or a range, and whether it is willing to order the
+one irreversible action in the app on that number. An estimate disqualifies
+itself by being that wide *and* straddling the target — an interval entirely
+above target is certain however wide it is. When it is disqualified the card
+asks for a reading and demotes "Out of the oven" to a secondary action rather
+than removing it; removing it brings back walkthrough 1's "there was no way to
+finish" whenever the fit is loose. This is presentation only: `advise()` and the
+parity fixture know nothing about it.
+
 **`render()` runs every second.** It must be cheap and idempotent. Anything
 rebuilt there can be replaced under the user's finger, which is why `setAction()`
 only touches the DOM when the button actually changes.

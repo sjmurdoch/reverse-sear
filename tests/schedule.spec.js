@@ -189,6 +189,71 @@ test.describe('what the card says', () => {
     expect(parseFloat(r.coreNow)).toBeGreaterThanOrEqual(44);
   });
 
+  // Walkthrough 5. The phone slept through the check; the cook comes back to an
+  // estimate that is almost all extrapolation. The median crossing target is not
+  // a reason to take the steak out -- a probe is recoverable and a pull is not.
+  test('will not order the pull on an estimate too vague to state', async ({ app }) => {
+    await app.seed([[0, 5], [14, 12]], { elapsed: 20 });
+    const s = await app.state();
+    await app.advance(s.dueMin - s.elapsedMin + 20);   // asleep through the check
+
+    const r = await app.read();
+    const [lo, hi] = (r.at.match(/core (\d+)–(\d+) °C/) || []).slice(1).map(Number);
+    expect(lo, 'this state is the one worth testing: a wide interval').toBeDefined();
+    expect(hi - lo, 'straddling the target').toBeGreaterThan(6);
+    expect(lo).toBeLessThan(44);
+
+    expect(r.label).toMatch(/check it now/i);
+    expect(r.label).not.toMatch(/take it out/i);
+    expect(r.why).toMatch(/too loose to pull on/i);
+    // but the way out is demoted, never removed: losing it is walkthrough 1's
+    // "there was no way to finish", coming back whenever the fit is loose.
+    expect(r.action).toMatch(/out of the oven anyway/i);
+    const cls = await app.page.getAttribute('#verdictActs button', 'class');
+    expect(cls, 'and it is the secondary action').toBe('ghost');
+    await app.page.click('#verdictActs button');
+    await app.settle();
+    expect((await app.state()).finishedAt, 'it still works').toBeTruthy();
+  });
+
+  test('but a wide interval that sits entirely above target is certain', async ({ app }) => {
+    // Width alone does not disqualify an estimate: 58-67 °C is wide and says
+    // the same thing everywhere in it.
+    await app.seed([[0, 5], [16, 20], [28, 32]]);
+    await app.advance(40);
+    const r = await app.read();
+    const [lo, hi] = (r.at.match(/core (\d+)–(\d+) °C/) || []).slice(1).map(Number);
+    expect(hi - lo).toBeGreaterThan(6);
+    expect(lo).toBeGreaterThan(44);
+    expect(r.label).toMatch(/take it out now/i);
+    expect(await app.page.getAttribute('#verdictActs button', 'class')).toBe('primary');
+  });
+
+  test('names what was missed: a check, or the pull itself', async ({ app }) => {
+    // "45 min past the planned check" while the app is telling you to take the
+    // steak out sends the cook looking for a probe they never owed: once the
+    // plan coasts, the appointment *is* the pull.
+    await app.seed([[0, 5], [18, 22], [30, 34], [38, 40]]);
+    expect((await app.read()).label).toMatch(/coast/i);
+    const s = await app.state();
+    await app.advance(s.dueMin - s.elapsedMin + 6);
+    expect((await app.read()).at).toMatch(/[56] min past the time to take it out/);
+  });
+
+  test('a long wait says an oven you open anyway is a free reading', async ({ app }) => {
+    // The tool's whole argument is that the opening is what costs, not the
+    // reading -- and this cook has potatoes in the same oven.
+    await app.seed([[0, 5], [14, 12], [26, 22]], { elapsed: 27 });
+    const r = await app.read();
+    expect(parseInt(r.clock, 10), 'a wait long enough to be worth saying it in').toBeGreaterThan(10);
+    expect(r.why).toMatch(/once the door is open a reading is free/i);
+
+    // and not when the check is imminent, where it is just noise
+    const s = await app.state();
+    await app.advance(s.dueMin - s.elapsedMin - 3);
+    expect((await app.read()).why).not.toMatch(/free/i);
+  });
+
   test('coasting tells you to stop opening the oven', async ({ app }) => {
     await app.seed([[0, 5], [18, 22], [30, 34], [38, 40]]);
     const r = await app.read();

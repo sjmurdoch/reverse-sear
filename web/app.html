@@ -249,7 +249,7 @@
     text-wrap: pretty;
   }
   .dockwarn:empty { display: none; }
-  .dock .labelrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+  .labelrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
   .chips { display: flex; gap: 4px; }
   .chips button {
     font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
@@ -422,6 +422,17 @@
         you open the door.</p>
       <button class="ghost" id="addBtn" type="button">Add another steak</button>
       <p class="note" id="priorNote"></p>
+      <!-- The steak goes in when the oven is free; the phone is found later.
+           Readings can already be backdated -- this is the same control for the
+           one reading the whole cook is anchored to. -->
+      <div class="labelrow" id="startAgeRow">
+        <label for="startBtn">Went into the oven</label>
+        <div class="chips" id="startChips" role="group" aria-label="When did it go in">
+          <button type="button" data-age="0" aria-pressed="true">now</button>
+          <button type="button" data-age="5" aria-pressed="false">5m ago</button>
+          <button type="button" data-age="10" aria-pressed="false">10m ago</button>
+        </div>
+      </div>
       <button class="primary" id="startBtn" type="button">Start cook</button>
       <p class="dockwarn" id="startWarn" role="status"></p>
       <p class="note" id="startNote">Probe the raw steak, type that number, and press <strong>Start cook</strong>
@@ -702,6 +713,15 @@ function advise(samples, nowMin, target) {
  * ------------------------------------------------------------------ */
 const DROP_QUERY_C = 3.0;   // a reading this far below the last one gets queried
 
+/* How wide the 5-95% interval has to be before the estimate stops being a
+ * number and becomes a range.  This is a *presentation* threshold -- advise()
+ * and the parity fixture know nothing about it -- and it governs two decisions
+ * that have to agree: whether the card states a point estimate, and whether it
+ * is willing to order the one irreversible action in the app on that estimate.
+ * Saying "core 32-67 C, best guess 45.2" and "Take it out now" in the same
+ * breath is the card contradicting itself. */
+const SPREAD_WIDE_C = 6.0;
+
 // Returns a reason to refuse `val`, or "" to accept it.
 function readingProblem(val, ovenC) {
   if (!Number.isFinite(val)) return "Type the core temperature the probe is showing.";
@@ -773,6 +793,7 @@ const STEAK_DEFAULTS = {
 
 let state = { ovenC: 125, fan: false, steaks: [], current: null };
 let readingAge = 0;          // minutes: how long ago the reading in the box was taken
+let startAge = 0;            // minutes: how long ago the steaks actually went in
 let dockNote = "";           // a refused reading, held until an accepted one replaces it
 let samples = null, plan = null;
 const fits = new Map();      // steak id -> { sig, samples, plan }
@@ -1094,6 +1115,7 @@ function render() {
   // A steak that is already in the oven has no starting temperature left to ask
   // for; the extras hide theirs the same way.
   $("startTempField").classList.toggle("hidden", !!s1.startedAt && !s1.finishedAt);
+  $("startAgeRow").classList.toggle("hidden", !pendingSteaks().length);
 
   // One press puts in everything that is not already in, because that is the
   // physical action -- and because re-starting a steak that is already cooking
@@ -1108,13 +1130,14 @@ function render() {
   sb.disabled = !pending.length;
   // The note under it tells the cook when to press it, so it has to name the
   // button that is actually there.
+  const zero = startAge ? `the clock's zero is ${startAge} minutes ago` : "that press is the clock's zero";
   const wantNote = !several
     ? "Probe the raw steak, type that number, and press <strong>Start cook</strong> as the steak " +
-      "goes into the oven — that press is the clock's zero."
+      `goes into the oven — ${zero}.`
     : !pending.length
       ? "Everything is in the oven. The clock's zero was the press that put each one in."
       : `Probe each raw steak, type its number, and press <strong>${escapeHtml(startLabel)}</strong> ` +
-        "as they go into the oven — that press is the clock's zero.";
+        `as they go into the oven — ${zero}.`;
   if ($("startNote").innerHTML !== wantNote) $("startNote").innerHTML = wantNote;
 
   // These belong to every state, including the ones that return early below.
@@ -1165,8 +1188,14 @@ function render() {
     $("verdictLabel").textContent = several ? `Out of the oven — ${cur().name}` : "Out of the oven";
     $("verdictClock").textContent = state.finalTemp != null ? state.finalTemp.toFixed(1) + " °C" : "done";
     $("verdictClock").className = "clock";
+    // The task does not end at the oven: this persona still has to rest it and
+    // sear it, and the rest is the thing they are now timing. A card frozen at
+    // "after 68 min · pulled at 12:04" shows no progress at the one stage where
+    // the only question is how long it has been out.
+    const rest = Math.floor((Date.now() - state.finishedAt) / 60000);
     $("verdictAt").textContent = "after " + Math.round((state.finishedAt - state.startedAt) / 60000) +
-      " min  ·  pulled at " + new Date(state.finishedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      " min  ·  out at " + new Date(state.finishedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+      (rest >= 1 ? "  ·  resting " + rest + " min" : "");
     $("verdictWhy").textContent =
       "Rest it — the core drifts up a couple of degrees off the heat, and the sear adds more. Sear when you are ready.";
     setAction(actsEl, several ? "again-many" : "again",
@@ -1227,38 +1256,60 @@ function render() {
   // the value from the last fit, so the readout climbs while you watch it and
   // so an overdue check escalates the moment the estimate passes target.
   const [nLo, nMid, nHi] = pcts(samples.map(sm => modelTemp(sm, t)), [0.05, 0.5, 0.95]);
-  const pastTarget = nMid >= state.targetC - 0.15;
+  const atTarget = nMid >= state.targetC - 0.15;
+  // How the number is *stated*: a 6 °C spread is not a number (walkthrough 3).
+  const wide = nHi - nLo > SPREAD_WIDE_C;
+  // Whether the card may *order the pull* on it. Come back to a phone that
+  // slept through the check and the estimate is mostly extrapolation: 5-95% of
+  // 32-67 C, median 45.2, against a 44 C target. The median crossing target is
+  // not a reason to take the steak out -- it is a reason to open the door and
+  // find out. A probe is recoverable; a pull is not.
+  //
+  // Width alone does not decide it: an interval of 58-67 °C is wide and yet
+  // says the same thing everywhere in it. What disqualifies an estimate is
+  // straddling the target while being that wide.
+  const unsure = wide && nLo < state.targetC - 0.15;
+  const pastTarget = atTarget && !unsure;
 
   let label, cls;
-  if (plan.action === "pull" || pastTarget || (due && plan.action === "coast")) {
+  if (!unsure && (plan.action === "pull" || pastTarget || (due && plan.action === "coast"))) {
     label = "Take it out now"; cls = "is-due";
   }
+  else if (atTarget || due) { label = "Check it now"; cls = "is-due"; }
   else if (plan.action === "coast") { label = "Coast — oven stays shut"; cls = "is-coast"; }
-  else if (due) { label = "Check it now"; cls = "is-due"; }
   else if (plan.stall > 0.25) { label = "Next check in"; cls = "is-stall"; }
   else { label = "Next check in"; cls = "is-wait"; }
-  const pullNow = cls === "is-due" && (plan.action !== "measure" || pastTarget);
+  const pullNow = label === "Take it out now";
+  // The estimate is too vague to pull on, but the cook may know better than the
+  // model -- they have just looked at it. Keep the way out, demoted rather than
+  // removed: losing it altogether is walkthrough 1's "there was no way to
+  // finish", coming back whenever the fit is loose.
+  const offerPull = pullNow || (atTarget && unsure);
 
   v.className = "card verdict " + cls;
   $("verdictLabel").textContent = label;
   const clockEl = $("verdictClock");
   clockEl.className = "clock";
-  clockEl.textContent = (due || pastTarget) ? "now"
+  clockEl.textContent = (due || atTarget) ? "now"
     : remaining >= 2 ? Math.round(remaining) + " min"
     : fmtClock(remaining);
 
   // How late you are is the thing you most need to know when you come back to
   // an overdue steak, so say it rather than blanking the line.
-  if (due || pastTarget) {
+  if (due || atTarget) {
     const late = state.dueAt ? Math.max(0, (Date.now() - state.dueAt) / 60000) : 0;
     // Before the second reading this number is nearly all prior and can be ten
     // degrees out. A bare "core about 24 °C" reads as knowledge; say how little
     // is known, or the cook skips the probe it is asking for.
-    const core = nHi - nLo > 6
+    const core = wide
       ? "core " + nLo.toFixed(0) + "–" + nHi.toFixed(0) + " °C, best guess " + nMid.toFixed(1)
       : "core about " + nMid.toFixed(1) + " °C";
+    // What was missed depends on what was promised: once the plan is coasting,
+    // `dueAt` is the moment to take the steak out, and calling that a missed
+    // "check" sends the cook looking for a probe they never owed.
+    const missed = plan.action === "measure" ? "past the planned check" : "past the time to take it out";
     $("verdictAt").innerHTML = late > 0.5
-      ? '<span class="over">' + Math.round(late) + " min past the planned check</span>  ·  " + core
+      ? '<span class="over">' + Math.round(late) + " min " + missed + "</span>  ·  " + core
       : core;
   } else {
     $("verdictAt").textContent =
@@ -1266,7 +1317,9 @@ function render() {
       "  ·  " + promised.toFixed(0) + " min in";
   }
   $("verdictWhy").textContent =
-    pastTarget && plan.action === "measure"
+    atTarget && unsure
+      ? `The estimate has reached your target, but only to within ${nLo.toFixed(0)}–${nHi.toFixed(0)} °C — too loose to pull on. Probe it and find out.`
+    : pastTarget && plan.action === "measure"
       ? "The estimate has already reached your target. Take it out, or probe it now if you want to be sure."
     : due && plan.action === "measure"
       ? "This is the check it asked for. Probe the centre, put the steak straight back, and log the number."
@@ -1275,6 +1328,11 @@ function render() {
     // check" before there is a course.
     : state.readings.length < 2 && plan.action === "measure"
       ? "Nothing is fitted yet — this is the prior for a steak this size in an oven this hot. The first check is the one that turns it into a prediction."
+    // The whole argument of the tool is that the *opening* is what costs, not
+    // the reading. A cook whose potatoes are in the same oven is going to open
+    // that door anyway, and nothing said that a reading is free once they have.
+    : plan.action === "measure" && remaining > 10
+      ? plan.why + " Opening the oven for something else? Probe it while you are in there — once the door is open a reading is free."
       : plan.why;
 
   // renderTrip() owns the action button once more than one steak is in. Two
@@ -1282,7 +1340,11 @@ function render() {
   // second, and a tap then lands on an element that has just been detached --
   // the same defect the readings table had.
   if (activeSteaks().length <= 1) {
-    setAction(actsEl, pullNow ? "out" : "", pullNow ? '<button class="primary" type="button">Out of the oven</button>' : "", finishCook);
+    const kind = pullNow ? "out" : offerPull ? "out-unsure" : "";
+    setAction(actsEl, kind,
+      pullNow ? '<button class="primary" type="button">Out of the oven</button>'
+        : offerPull ? '<button class="ghost" type="button">Out of the oven anyway</button>' : "",
+      finishCook);
   }
 
   wakeEl.classList.toggle("live", !!wakeLock);
@@ -1331,11 +1393,19 @@ function renderTrip() {
   const remaining = (o.openAt - Date.now()) / 60000;
   const due = remaining <= 0;
 
+  // The same rule as the single-steak card: an estimate too loose to state as a
+  // number is too loose to take a steak out on. Vague ones stay on the probe
+  // list rather than joining the "take out" call.
   const liveOf = st => {
     const f = fits.get(st.id);
-    return f ? pcts(f.samples.map(th => modelTemp(th, localMin(st))), [0.5])[0] : null;
+    if (!f) return null;
+    const [lo, mid, hi] = pcts(f.samples.map(th => modelTemp(th, localMin(st))), [0.05, 0.5, 0.95]);
+    return { lo, mid, hi, unsure: hi - lo > SPREAD_WIDE_C && lo < st.targetC - 0.15 };
   };
-  const ready = running.filter(st => { const l = liveOf(st); return l != null && l >= st.targetC - 0.15; });
+  const ready = running.filter(st => {
+    const l = liveOf(st);
+    return l && !l.unsure && l.mid >= st.targetC - 0.15;
+  });
   const pulls = due ? o.orders.filter(x => x.kind === "pull").map(x => steakById(x.id)) : [];
   const out = ready.length ? ready : pulls;
 
@@ -1469,13 +1539,15 @@ function renderSteakList() {
       when = "out at " + fmtWallClock(s.finishedAt);
       pill = "out"; cls = "ok";
     } else if (f) {
-      const live = pcts(f.samples.map(th => modelTemp(th, localMin(s))), [0.5])[0];
+      const [lo95, live, hi95] = pcts(f.samples.map(th => modelTemp(th, localMin(s))), [0.05, 0.5, 0.95]);
+      const loose = hi95 - lo95 > SPREAD_WIDE_C && lo95 < s.targetC - 0.15;
       temp = live.toFixed(1) + " °C";
       const ready = t && Number.isFinite(t.pullAt) ? "out " + fmtWallClock(t.pullAt) : "";
       when = [ready, nth].filter(Boolean).join(" · ");
       const ord = opening && opening.orders.find(o => o.id === s.id);
       const due = opening && Date.now() >= opening.openAt;
-      if (live >= s.targetC - 0.15) { pill = "take out"; cls = "act"; }
+      if (live >= s.targetC - 0.15 && !loose) { pill = "take out"; cls = "act"; }
+      else if (live >= s.targetC - 0.15) { pill = "probe"; cls = "act"; }
       else if (due && ord && ord.kind === "pull") { pill = "take out"; cls = "act"; }
       else if (due) { pill = "probe"; cls = "act"; }
       else if (f.plan.stall > 0.25) { pill = "may stall"; cls = "warn"; }
@@ -1807,6 +1879,7 @@ function startAnother() {
   fits.clear();
   samples = null; plan = null;
   readingAge = 0;
+  startAge = 0;
   dockNote = "";
   releaseWakeLock();
   save();
@@ -1899,7 +1972,10 @@ $("startBtn").addEventListener("click", () => {
     }
   }
   $("startWarn").textContent = "";
-  const at = Date.now();
+  // The press is the clock's zero unless the cook says otherwise: a steak that
+  // went in with the potatoes and was started ten minutes later reads as a
+  // steak heating impossibly fast, and comes out about 1.4 °C short.
+  const at = Date.now() - startAge * 60000;
   going.forEach((st, i) => {
     st.startedAt = at;
     st.finishedAt = null;
@@ -1910,6 +1986,8 @@ $("startBtn").addEventListener("click", () => {
   // Keep the readouts on the steak they were on if it is still cooking; a steak
   // put into a running cook must not steal the card from the one in progress.
   if (!activeSteaks().some(st => st.id === state.current)) state.current = going[0].id;
+  startAge = 0;
+  [...$("startChips").children].forEach(c => c.setAttribute("aria-pressed", String(c.dataset.age === "0")));
   save();
   $("setup").open = false;
   // The first tap is the only reliable moment to unblock audio, so take it.
@@ -1917,6 +1995,14 @@ $("startBtn").addEventListener("click", () => {
   acquireWakeLock();
   recompute(); rescheduleCheck(going); save(); render();
   showVerdict();
+});
+
+$("startChips").addEventListener("click", e => {
+  const b = e.target.closest("button[data-age]");
+  if (!b) return;
+  startAge = parseFloat(b.dataset.age);
+  [...$("startChips").children].forEach(c => c.setAttribute("aria-pressed", String(c === b)));
+  render();
 });
 
 $("ageChips").addEventListener("click", e => {

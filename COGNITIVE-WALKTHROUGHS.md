@@ -630,3 +630,195 @@ them: 100 passed, `iphone-webkit`, [run 15][wk]. So the coverage claim above
 holds on Safari's engine; it just was not what caught anything here.
 
 [wk]: https://github.com/sjmurdoch/reverse-sear/actions/runs/33123992895
+
+---
+
+## Walkthrough 5 — the cook who is also cooking everything else
+
+**Persona.** Walkthrough 1's cook, on a Sunday. The steak is not the only thing
+in the oven: the potatoes are in there too, and they get looked at on their own
+schedule. Sauce on the hob, phone face-down on the counter, wet hands, four
+seconds of attention. Same 44 °C on the probe as it leaves the oven.
+
+**Scenario.** The steak goes in when the oven is free — which is a few minutes
+before the phone is picked up. The door gets opened three times for the
+potatoes. The dial goes up to 160 °C at the half-hour so they brown. Somewhere
+in the middle the phone locks itself and the tab is suspended for half an hour.
+Dinner is then late, so the steak sits past its time, and when it does come out
+it has to rest before it is seared.
+
+**How it was walked.** Two halves. The physical disturbances were run against
+`model/steak.py` as ground truth — a step change in the oven's setpoint, and
+`DoorOpening`s that are nothing to do with probing — with the fitter driven
+closed-loop over them. The interaction was walked in a headless iPhone context
+against a controllable clock, including suspending the page the way a locked
+phone does.
+
+**Task stages walked.** The steak goes in (late) → the long wait → the door
+opened for something else → the dial turned up → the phone sleeps through the
+check → dinner is late and the steak sits → out of the oven → rest → sear.
+
+**What held, and it is the more important half.** The model and the schedule
+absorb everything this persona physically does to them:
+
+```
+                                          pull at    true core    error
+steak alone, patted dry                   47.7 min      44.6      +0.6
+door opened 45 s at 12, 24 and 36 min     49.3 min      44.0      +0.0
+dial to 160 °C at 30 min, app told        42.5 min      44.5      +0.5
+dial to 160 °C at 30 min, app not told    42.9 min      45.0      +1.0
+straight from the bag, still oven         50.8 min      44.3      +0.3
+```
+
+Opening the oven for the potatoes costs about two minutes on the pull time and
+nothing on the temperature: the next reading sees the slowdown and the fit
+absorbs it. Turning the dial up and not telling the app costs half a degree.
+Neither needs a feature. The app also recovers correctly from being suspended:
+no timer runs while the tab is hidden, and the alarm fires on the first render
+after it comes back. Every defect below is in what the card *said*.
+
+### 1. The card ordered the irreversible action on a number it had just refused to state
+
+**Stage:** coming back to a phone that slept through the check. **Question
+failed:** 3, and 1 behind it — the cook associates "Take it out now" with "it is
+at temperature", and the card knew it was not entitled to that claim.
+
+Two readings, then twenty-nine minutes of nothing, because the phone locked. On
+return, in one line:
+
+```
+Take it out now
+now
+20 min past the planned check  ·  core 32–67 °C, best guess 45.2
+```
+
+Walkthrough 3 taught this line to stop pretending: wider than 6 °C and it shows
+the range instead of a point value. But the escalation to "take it out" still
+fired on the median alone, so the card simultaneously said *I know this to
+within about seventeen degrees* and *take the steak out now*. Everything in that
+interval from 32 to 44 is a raw steak on the plate, and the estimate is almost
+entirely extrapolation — the honest action is to open the door, which is
+recoverable, rather than to pull, which is not.
+
+**Change.** The pull may only be ordered on an estimate that can bear it: one
+whose interval is narrow, **or** one that lies entirely above target. Width
+alone does not disqualify anything — 58–67 °C is wide and says the same thing
+everywhere in it; what disqualifies an estimate is being that wide *and*
+straddling the target. Otherwise the card says **Check it now** and why: *"The
+estimate has reached your target, but only to within 32–67 °C — too loose to
+pull on. Probe it and find out."*
+
+The way out is demoted, not removed: **Out of the oven anyway** stays as a
+secondary action, because a cook who has just looked at the steak knows more
+than the model does — and because removing it would bring back walkthrough 1's
+"there was no way to finish" every time the fit went loose. `advise()` is
+untouched, so the parity fixture is untouched; this is `render()` refusing to
+overstate a state it can see. The same rule now decides the per-steak "take out"
+pills and which steaks the trip card calls out.
+
+### 2. The one reading the whole cook is anchored to could not be backdated
+
+**Stage:** the steak goes in. **Question failed:** 1 — the cook is doing the
+right thing and the app is quietly recording a different cook.
+
+Walkthrough 1 added **now / 1m ago / 2m ago** to readings, because you probe,
+put the steak back, wipe your hands, and only then pick up the phone. The start
+has the same problem and a bigger lever on the answer: the steak goes in when
+the oven is free, and the phone is found afterwards. Against `model/steak.py`,
+with everything else done exactly right:
+
+```
+Start pressed on time                                 pulled at 47.2 min   44.1 °C   +0.13
+Start pressed  3 min late, fridge number still typed  pulled at 43.9       43.9      −0.09
+Start pressed  6 min late, fridge number still typed  pulled at 40.3       43.4      −0.62
+Start pressed 10 min late, fridge number still typed  pulled at 35.3       42.6      −1.43
+Start pressed 10 min late, steak re-probed then       pulled at 36.1       43.2      −0.78
+```
+
+Re-probing at the late press only halves it, because the fit still spends its
+dead-time prior on a lag the steak has already served. Nothing on the card ever
+says so — the cook sees a normal cook, three minutes short.
+
+**Change.** **now / 5m ago / 10m ago** beside the start, under the label *Went
+into the oven*, and the note under the button stops calling the press the
+clock's zero when the cook has said it was not. The chip resets after the press,
+so the next cook is not silently backdated too, and the row disappears once
+there is nothing left to put in.
+
+### 3. The card called the pull a "check"
+
+**Stage:** dinner is late and the steak is sitting past its time. **Question
+failed:** 3.
+
+`"45 min past the planned check"` — while the app was telling the cook to take
+the steak out. Walkthrough 2 made `dueAt` become the *pull* time as soon as the
+plan coasts, which is right, but the sentence describing a missed appointment
+was never told: it sends a cook who is already late looking for a probe they
+never owed.
+
+**Change.** Name what was actually missed — *"45 min past the time to take it
+out"* when the appointment was the pull, *"past the planned check"* when it was
+a check.
+
+### 4. The finished card was frozen at the moment of the pull
+
+**Stage:** rest, then sear. **Question failed:** 4 — at the last stage of the
+task, where the only question the cook has is how long it has been out.
+
+Nine minutes after pulling, the card said exactly what it had said at the pull:
+*"after 68 min · pulled at 12:04 AM"*. The tool is called Reverse Sear Pilot and
+it stops piloting at the oven door. The rest is the thing the cook is now
+timing, and the app is the only thing in the kitchen that knows when the steak
+came out.
+
+**Change.** The card counts it: *"after 68 min · out at 12:04 AM · resting
+9 min"*, live, and it survives a reload. This is not the rest-carryover model
+walkthrough 1 rejected and still rejects — it is a clock, not a prediction.
+
+### 5. Nothing said that a door you were opening anyway is a free reading
+
+**Stage:** the long wait, with the potatoes in the same oven. **Question
+failed:** 2 — the useful action is available and never mentioned.
+
+The entire argument of the tool is that the *opening* is what costs, not the
+reading. That is why several steaks share one trip. But this cook opens that
+door on the potatoes' schedule, and at that moment a probe is free — and the
+card, counting down to its own appointment, never said so.
+
+**Change.** On a wait longer than ten minutes the card adds it: *"Opening the
+oven for something else? Probe it while you are in there — once the door is open
+a reading is free."* Not when the check is imminent, where it is noise.
+
+### Deliberately not changed
+
+- **No hold-warm mode.** When dinner is late, the physically right answer is to
+  drop the oven to about 50 °C and hold. That moves the asymptote the app is
+  fitting, mid-cook, and every reading before the change would then belong to a
+  different curve. It is a real feature and a real modelling problem, and it is
+  not a walkthrough-sized change. Recorded as a proposal.
+- **No "the oven changed" event.** Turning the dial up is already handled by
+  editing the oven field, and the measured cost of not bothering is +0.5 °C. A
+  new concept to save half a degree is a bad trade for a cook with wet hands.
+- **`advise()` untouched, again.** Every change here is `render()` choosing what
+  it is entitled to say about a state it can already see, so the scheduling
+  rule, the parity fixture and `COAST_UNDERSHOOT_C` are all as they were.
+- **The alarm still cannot ring while the phone is asleep.** Walkthrough 1
+  covered this with the wake lock and the status line that says which world you
+  are in; a suspended tab runs nothing, and no amount of interface fixes that.
+  What the walkthrough checked is that it recovers: it beeps on return and says
+  how late.
+
+### Verification
+
+Seven regression tests: the pull refused on an estimate that straddles the
+target while spanning 35 °C, and its counterpart where a wide interval sitting
+entirely above target still orders the pull; the same rule per steak, on the
+glance pills and on the trip card; a backdated start landing the clock's zero
+ten minutes back with the chip resetting after it; the finished card counting
+the rest across a reload; the missed appointment named as check or pull; and the
+free-reading line appearing on a long wait but not on an imminent one. Six of
+the seven fail on the code as it was, each at the assertion that names the
+defect; the seventh is the counterpart, which must pass either way, and does.
+
+Run under `iphone-chromium` in a sandbox that cannot reach the Playwright CDN;
+WebKit is the gate that matters and runs in CI on the pushed commit.

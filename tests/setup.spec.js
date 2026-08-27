@@ -96,6 +96,31 @@ test.describe('setting up a cook', () => {
     await expect(app.page.locator('#startTemp')).toBeFocused();
   });
 
+  // Walkthrough 5. The steak goes into the oven when the oven is free; the phone
+  // is found later. Readings could already be backdated -- this is the same
+  // control for the one reading the whole cook is anchored to.
+  test('a steak that went in before the phone was found', async ({ app }) => {
+    await app.page.click('#startChips button[data-age="10"]');
+    await app.settle();
+    expect(await app.page.textContent('#startNote'),
+      'the note must stop calling the press the zero').toMatch(/zero is 10 minutes ago/);
+
+    await app.page.fill('#startTemp', '9');
+    await app.page.click('#startBtn');
+    await app.settle();
+
+    const s = await app.state();
+    expect(s.elapsedMin, 'the clock starts ten minutes in').toBeGreaterThan(9.5);
+    expect(s.elapsedMin).toBeLessThan(11);
+    expect(s.readings).toEqual([{ t: 0, temp: 9 }]);
+    expect(s.dueAt, 'and it still has an appointment ahead of it').toBeGreaterThan(Date.now());
+
+    // the chip resets, so the next cook is not silently backdated too
+    expect(await app.page.getAttribute('#startChips button[data-age="0"]', 'aria-pressed')).toBe('true');
+    await expect(app.page.locator('#startAgeRow'),
+      'and there is nothing left to backdate once it is in').toBeHidden();
+  });
+
   test('starting reveals the cook and brings the answer into view', async ({ app }) => {
     // Act from the bottom of the page, where the button actually is.
     await app.page.$eval('#startBtn', el => el.scrollIntoView({ block: 'center' }));
