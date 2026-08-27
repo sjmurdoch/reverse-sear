@@ -118,7 +118,22 @@
     font-family: var(--mono); font-size: 13px; color: var(--ink-2);
     font-variant-numeric: tabular-nums;
   }
+  .verdict .at .over { color: var(--ember); }
   .verdict .why { font-size: 14px; color: var(--ink-2); text-wrap: pretty; }
+  .verdict .wake {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--ink-3);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .verdict .wake::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--wakedot, var(--ink-3)); flex: 0 0 auto;
+  }
+  .verdict .wake.live { --wakedot: var(--good); }
+  .verdict .wake:empty { display: none; }
+  .verdict .acts:empty { display: none; }
+  .verdict .acts { display: flex; gap: 10px; padding-top: 4px; }
+  .verdict .acts button { flex: 1; }
+  .verdict.is-done { --state: var(--good); }
   .verdict.is-due { --state: var(--ember); }
   .verdict.is-due .clock { color: var(--ember); }
   .verdict.is-coast { --state: var(--good); }
@@ -229,6 +244,14 @@
     border-top: 1px solid var(--line);
   }
   .dock .inner { max-width: 720px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  .dock .labelrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+  .chips { display: flex; gap: 4px; }
+  .chips button {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em;
+    background: var(--surface-2); color: var(--ink-3);
+    border: 1px solid var(--line); border-radius: 7px; padding: 3px 7px; cursor: pointer;
+  }
+  .chips button[aria-pressed="true"] { background: var(--cold); border-color: var(--cold); color: #fff; }
   .dock .field { flex: 1; }
   .dock button.primary { flex: 0 0 auto; }
   .hidden { display: none !important; }
@@ -253,9 +276,11 @@
     <div class="clock small" id="verdictClock">--:--</div>
     <div class="at" id="verdictAt"></div>
     <div class="why" id="verdictWhy">Enter the oven temperature and the steak, then log the temperature as it goes in.</div>
+    <div class="wake" id="wakeNote"></div>
+    <div class="acts" id="verdictActs"></div>
   </section>
 
-  <dl class="stats">
+  <dl class="stats" id="statsRow">
     <div class="stat">
       <dt>Core now</dt>
       <dd id="statNow">—<span class="unit"> °C</span></dd>
@@ -273,7 +298,7 @@
     </div>
   </dl>
 
-  <section class="card chartwrap">
+  <section class="card chartwrap" id="chartCard">
     <canvas id="chart" aria-label="Predicted core temperature over time"></canvas>
     <div class="legend">
       <span style="color:var(--ember)"><i class="swatch"></i>predicted core</span>
@@ -283,8 +308,8 @@
     </div>
   </section>
 
-  <div class="section-title">Readings</div>
-  <section class="card">
+  <div class="section-title" id="readingsTitle">Readings</div>
+  <section class="card" id="readingsCard">
     <table>
       <thead><tr><th>Elapsed</th><th class="num">Core</th><th class="num">vs model</th><th class="act"></th></tr></thead>
       <tbody id="log"><tr><td colspan="4" style="color:var(--ink-3);border-top:0">Nothing logged yet.</td></tr></tbody>
@@ -321,6 +346,9 @@
           </div>
         </div>
       </div>
+      <p class="note">Target is the core temperature <strong>as it leaves the oven</strong>. If you want it
+        higher on the plate, the rest and the sear add to it — set this to the number you want on the probe when
+        you open the door.</p>
       <p class="note" id="priorNote"></p>
       <div class="row">
         <div class="field">
@@ -329,6 +357,8 @@
         </div>
         <button class="primary" id="startBtn" type="button">Start cook</button>
       </div>
+      <p class="note">Probe the raw steak, type that number, and press <strong>Start cook</strong> as the steak
+        goes into the oven — that press is the clock's zero.</p>
       <button class="ghost" id="resetBtn" type="button">Reset everything</button>
     </div>
   </details>
@@ -359,8 +389,15 @@
 <div class="dock hidden" id="dock">
   <div class="inner">
     <div class="field">
-      <label for="readTemp">Log a reading — core °C</label>
-      <input id="readTemp" type="number" inputmode="decimal" step="0.1" placeholder="e.g. 31.4">
+      <div class="labelrow">
+        <label for="readTemp">Core °C</label>
+        <div class="chips" id="ageChips" role="group" aria-label="When was this reading taken">
+          <button type="button" data-age="0" aria-pressed="true">now</button>
+          <button type="button" data-age="1" aria-pressed="false">1m ago</button>
+          <button type="button" data-age="2" aria-pressed="false">2m ago</button>
+        </div>
+      </div>
+      <input id="readTemp" type="number" inputmode="decimal" step="0.1" enterkeyhint="done" placeholder="e.g. 31.4">
     </div>
     <button class="primary" id="logBtn" type="button">Log</button>
   </div>
@@ -587,8 +624,12 @@ const $ = id => document.getElementById(id);
 let state = {
   ovenC: 125, targetC: 44, massKg: 1.0, thickMm: 40, fan: false,
   startedAt: null,           // epoch ms
+  dueAt: null,               // epoch ms of the check we last asked for
+  finishedAt: null,          // epoch ms the steak came out
+  finalTemp: null,           // °C, the model's estimate at that moment
   readings: []               // [{ t: minutes, temp: °C }]
 };
+let readingAge = 0;          // minutes: how long ago the reading in the box was taken
 let samples = null, plan = null;
 
 function load() {
@@ -605,7 +646,7 @@ function cfg() {
   return { ovenC: state.ovenC, targetC: state.targetC, massKg: state.massKg, thickMm: state.thickMm, fan: state.fan };
 }
 function isStale() {
-  return !!state.startedAt && (Date.now() - state.startedAt) > STALE_HOURS * 3600e3;
+  return !!state.startedAt && !state.finishedAt && (Date.now() - state.startedAt) > STALE_HOURS * 3600e3;
 }
 function nowMin() {
   return state.startedAt ? (Date.now() - state.startedAt) / 60000 : 0;
@@ -616,6 +657,24 @@ function recompute() {
   const pr = buildPriors(cfg());
   samples = fitPosterior(state.readings, pr, 20240501 + state.readings.length * 7919);
   plan = advise(samples, nowMin(), state.targetC);
+}
+
+// Called only when new information arrives, never on a plain refit.
+//
+// The schedule has to be sticky.  advise() floors its next check at
+// now + MIN_GAP_MIN, so re-running it on a timer walks the appointment forward
+// a few minutes at a time: the countdown never reaches zero, the cook never
+// takes the reading it asked for, and the app quietly coasts to the end on the
+// two readings it already had.  So the promised moment is fixed when the
+// information behind it changes, and nothing else moves it.
+function rescheduleCheck() {
+  state.dueAt = plan ? state.startedAt + plan.next * 60000 : null;
+}
+
+// Minutes from the start of the cook at which the promised check falls.
+function dueMin() {
+  if (state.dueAt == null) return plan ? plan.next : 0;
+  return (state.dueAt - state.startedAt) / 60000;
 }
 
 /* ------------------------------------------------------------------ *
@@ -633,6 +692,28 @@ function fmtWall(minsFromStart) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// Rebuild the action button only when it actually changes: render() runs every
+// second, and replacing a button mid-tap loses the tap.
+function setAction(host, kind, html, handler) {
+  if (host.dataset.kind === kind) return;
+  host.dataset.kind = kind;
+  host.innerHTML = html;
+  const b = host.querySelector("button");
+  if (b && handler) b.addEventListener("click", handler);
+}
+
+// Both the Start button and the Log button sit at the bottom of the page while
+// the thing they change -- the countdown -- sits at the top.  Bring it back into
+// view, or the user acts and sees nothing happen.
+function showVerdict() {
+  const el = $("verdict");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  if (r.top < 0 || r.bottom > window.innerHeight) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
 let alarmFired = false;
 // Suppress the alarm on the very first render after a reload: a restored cook
 // that is already overdue should show its state, not shout at you.
@@ -640,8 +721,18 @@ let armed = false;
 function render() {
   const v = $("verdict");
   const started = !!state.startedAt;
-  $("dock").classList.toggle("hidden", !started);
-  $("mastheadState").textContent = started ? fmtClock(nowMin()) + " elapsed" : "not started";
+  const finished = !!state.finishedAt;
+  const active = started && !finished && !isStale();
+
+  $("dock").classList.toggle("hidden", !active);
+  // Before the first reading these are three empty cards between "Set up your
+  // steak" and the form that does it, pushing the form off the bottom of the
+  // phone.  Show them once there is something in them.
+  ["statsRow", "chartCard", "readingsTitle", "readingsCard"].forEach(id =>
+    $(id).classList.toggle("hidden", !started));
+  $("mastheadState").textContent = finished
+    ? "done"
+    : started ? fmtClock(nowMin()) + " elapsed" : "not started";
 
   $("setupDigest").textContent =
     `${state.ovenC}°C ${state.fan ? "fan" : ""} · target ${state.targetC}°C · ${state.thickMm}mm`;
@@ -652,6 +743,29 @@ function render() {
     `effective asymptote around <strong>${priors.tInfMean.toFixed(0)} °C</strong> once the surface has dried. ` +
     `Both get corrected by your first two readings.`;
 
+  const wakeEl = $("wakeNote"), actsEl = $("verdictActs");
+  wakeEl.className = "wake";
+  wakeEl.textContent = "";
+
+  if (finished) {
+    v.className = "card verdict is-done";
+    $("verdictLabel").textContent = "Out of the oven";
+    $("verdictClock").textContent = state.finalTemp != null ? state.finalTemp.toFixed(1) + " °C" : "done";
+    $("verdictClock").className = "clock";
+    $("verdictAt").textContent = "after " + Math.round((state.finishedAt - state.startedAt) / 60000) +
+      " min  ·  pulled at " + new Date(state.finishedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    $("verdictWhy").textContent =
+      "Rest it — the core drifts up a couple of degrees off the heat, and the sear adds more. Sear when you are ready.";
+    setAction(actsEl, "again", '<button class="ghost" type="button">Start another steak</button>', startAnother);
+    if (state.finalTemp != null) {
+      $("statNow").innerHTML = state.finalTemp.toFixed(1) + '<span class="unit"> °C</span>';
+      $("statNowSpread").textContent = "at the moment you pulled it";
+    }
+    drawChart();
+    renderLog();
+    return;
+  }
+
   if (started && isStale()) {
     v.className = "card verdict is-stall";
     $("verdictLabel").textContent = "Earlier cook still open";
@@ -659,13 +773,22 @@ function render() {
     $("verdictClock").className = "clock small";
     $("verdictAt").textContent = "started " + new Date(state.startedAt).toLocaleString([], {
       weekday: "short", hour: "2-digit", minute: "2-digit" });
-    $("verdictWhy").textContent = "This one is long finished. Reset in Setup to start a new steak — or carry on if you really are still cooking.";
+    $("verdictWhy").textContent = "This one is long finished. Start a new steak, or carry on if you really are still cooking.";
+    setAction(actsEl, "again-stale", '<button class="primary" type="button">Start another steak</button>', startAnother);
     drawChart();
     renderLog();
     return;
   }
 
   if (!started || !plan) {
+    setAction(actsEl, "", "", null);
+    // Clear the readouts, or the last cook's numbers linger over a fresh setup.
+    $("statNow").innerHTML = '—<span class="unit"> °C</span>';
+    $("statNowSpread").textContent = "estimate";
+    $("statHit").textContent = "—";
+    $("statHitSpread").innerHTML = "&nbsp;";
+    $("statTau").textContent = "—";
+    $("statTauSpread").innerHTML = "&nbsp;";
     v.className = "card verdict";
     $("verdictLabel").textContent = "Set up your steak";
     $("verdictClock").textContent = "--:--";
@@ -678,39 +801,66 @@ function render() {
   }
 
   const t = nowMin();
-  const remaining = plan.next - t;
+  const promised = dueMin();
+  const remaining = promised - t;
   const due = remaining <= 0;
 
+  // The posterior only moves when a reading arrives, but the predicted core
+  // does move -- every second.  Recompute it on each tick rather than reusing
+  // the value from the last fit, so the readout climbs while you watch it and
+  // so an overdue check escalates the moment the estimate passes target.
+  const [nLo, nMid, nHi] = pcts(samples.map(sm => modelTemp(sm, t)), [0.05, 0.5, 0.95]);
+  const pastTarget = nMid >= state.targetC - 0.15;
+
   let label, cls;
-  if (plan.action === "pull" || (due && plan.action === "coast")) { label = "Take it out now"; cls = "is-due"; }
+  if (plan.action === "pull" || pastTarget || (due && plan.action === "coast")) {
+    label = "Take it out now"; cls = "is-due";
+  }
   else if (plan.action === "coast") { label = "Coast — oven stays shut"; cls = "is-coast"; }
   else if (due) { label = "Check it now"; cls = "is-due"; }
   else if (plan.stall > 0.25) { label = "Next check in"; cls = "is-stall"; }
   else { label = "Next check in"; cls = "is-wait"; }
+  const pullNow = cls === "is-due" && (plan.action !== "measure" || pastTarget);
 
   v.className = "card verdict " + cls;
   $("verdictLabel").textContent = label;
   const clockEl = $("verdictClock");
-  if (plan.action === "pull" || (due && plan.action !== "measure")) {
-    clockEl.textContent = "now";
-    clockEl.className = "clock";
-  } else if (due) {
-    clockEl.textContent = "now";
-    clockEl.className = "clock";
+  clockEl.className = "clock";
+  clockEl.textContent = (due || pastTarget) ? "now"
+    : remaining >= 2 ? Math.round(remaining) + " min"
+    : fmtClock(remaining);
+
+  // How late you are is the thing you most need to know when you come back to
+  // an overdue steak, so say it rather than blanking the line.
+  if (due || pastTarget) {
+    const late = state.dueAt ? Math.max(0, (Date.now() - state.dueAt) / 60000) : 0;
+    $("verdictAt").innerHTML = late > 0.5
+      ? '<span class="over">' + Math.round(late) + " min past the planned check</span>  ·  core about " +
+        nMid.toFixed(1) + " °C"
+      : "core about " + nMid.toFixed(1) + " °C";
   } else {
-    clockEl.textContent = fmtClock(remaining);
-    clockEl.className = "clock";
+    $("verdictAt").textContent =
+      (plan.action === "coast" ? "out of the oven at " : "at ") + fmtWall(promised) +
+      "  ·  " + promised.toFixed(0) + " min in";
   }
-  $("verdictAt").textContent = due ? "" :
-    (plan.action === "coast" ? "out of the oven at " : "at ") + fmtWall(plan.next) +
-    "  ·  " + plan.next.toFixed(0) + " min in";
-  $("verdictWhy").textContent = plan.why;
+  $("verdictWhy").textContent =
+    pastTarget && plan.action === "measure"
+      ? "The estimate has already reached your target. Take it out, or probe it now if you want to be sure."
+    : due && plan.action === "measure"
+      ? "This is the check it asked for. Probe the centre, put the steak straight back, and log the number."
+      : plan.why;
+
+  setAction(actsEl, pullNow ? "out" : "", pullNow ? '<button class="primary" type="button">Out of the oven</button>' : "", finishCook);
+
+  wakeEl.classList.toggle("live", !!wakeLock);
+  wakeEl.textContent = wakeLock
+    ? "Screen kept awake — leave this page open and it will beep"
+    : "Only beeps while this page is open — set a phone timer for " + fmtWall(promised);
 
   if (due && !alarmFired && armed) { alarmFired = true; beep(); }
   armed = true;
   if (!due) alarmFired = false;
 
-  const [nLo, nMid, nHi] = plan.tempNow;
   $("statNow").innerHTML = nMid.toFixed(1) + '<span class="unit"> °C</span>';
   $("statNowSpread").textContent = nLo.toFixed(1) + "–" + nHi.toFixed(1);
 
@@ -763,6 +913,7 @@ function drawChart() {
   const cv = $("chart");
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
   const g = cv.getContext("2d");
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -849,6 +1000,32 @@ function drawChart() {
   }
 }
 
+/* ---------- keep the screen alive ----------------------------------- *
+ * The countdown and its beep only run while this page is on screen: a
+ * backgrounded tab is throttled and a locked phone runs nothing at all.  A
+ * cook who puts the phone down expecting a kitchen timer would be let down
+ * silently, so hold a screen wake lock for the duration of a cook and say
+ * plainly, in the card, whether it is actually held.
+ * -------------------------------------------------------------------- */
+let wakeLock = null;
+
+async function acquireWakeLock() {
+  if (!("wakeLock" in navigator) || wakeLock || document.hidden) return;
+  if (!state.startedAt || state.finishedAt || isStale()) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; render(); });
+  } catch (e) { wakeLock = null; }
+  render();
+}
+
+function releaseWakeLock() {
+  if (!wakeLock) return;
+  const l = wakeLock;
+  wakeLock = null;
+  try { l.release(); } catch (e) { /* already gone */ }
+}
+
 /* ---------- alarm ---------- */
 let audioCtx = null;
 function beep() {
@@ -879,7 +1056,9 @@ function readSetup() {
 }
 
 ["ovenC", "targetC", "massKg", "thickMm"].forEach(id => {
-  $(id).addEventListener("input", () => { readSetup(); recompute(); render(); });
+  $(id).addEventListener("input", () => {
+    readSetup(); recompute(); rescheduleCheck(); save(); render();
+  });
 });
 
 $("fanToggle").addEventListener("click", e => {
@@ -887,30 +1066,76 @@ $("fanToggle").addEventListener("click", e => {
   if (!b) return;
   state.fan = b.dataset.fan === "1";
   [...$("fanToggle").children].forEach(c => c.setAttribute("aria-pressed", String(c === b)));
-  save(); recompute(); render();
+  recompute(); rescheduleCheck(); save(); render();
 });
+
+function startAnother() {
+  state.startedAt = null;
+  state.dueAt = null;
+  state.finishedAt = null;
+  state.finalTemp = null;
+  state.readings = [];
+  samples = null; plan = null;
+  readingAge = 0;
+  releaseWakeLock();
+  save();
+  $("setup").open = true;
+  render();
+  $("setup").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("startTemp").focus();
+}
+
+function finishCook() {
+  recompute();   // so the recorded temperature is the estimate right now
+  state.finishedAt = Date.now();
+  state.finalTemp = plan ? plan.tempNow[1] : null;
+  releaseWakeLock();
+  save();
+  render();
+  showVerdict();
+}
 
 $("startBtn").addEventListener("click", () => {
   readSetup();
   const t0 = parseFloat($("startTemp").value);
   if (!Number.isFinite(t0)) { $("startTemp").focus(); return; }
   state.startedAt = Date.now();
+  state.finishedAt = null;
+  state.finalTemp = null;
   state.readings = [{ t: 0, temp: t0 }];
   save();
   $("setup").open = false;
-  beep.warmup = true;
+  // The first tap is the only reliable moment to unblock audio, so take it.
   try { (audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)()).resume(); } catch (e) {}
-  recompute(); render();
+  acquireWakeLock();
+  recompute(); rescheduleCheck(); save(); render();
+  showVerdict();
+});
+
+$("ageChips").addEventListener("click", e => {
+  const b = e.target.closest("button[data-age]");
+  if (!b) return;
+  readingAge = parseFloat(b.dataset.age);
+  [...$("ageChips").children].forEach(c => c.setAttribute("aria-pressed", String(c === b)));
 });
 
 $("logBtn").addEventListener("click", () => {
   const val = parseFloat($("readTemp").value);
   if (!Number.isFinite(val)) { $("readTemp").focus(); return; }
-  state.readings.push({ t: nowMin(), temp: val });
+  // You probe the steak, put it back, wipe your hands, then type. Timestamping
+  // the typing rather than the probing makes the steak look slower than it is
+  // and pulls it late, so let the reading be backdated.
+  const last = state.readings.length ? state.readings[state.readings.length - 1].t : 0;
+  const t = Math.max(last + 0.1, nowMin() - readingAge);
+  state.readings.push({ t, temp: val });
   state.readings.sort((a, b) => a.t - b.t);
   $("readTemp").value = "";
   $("readTemp").blur();
-  save(); recompute(); render();
+  readingAge = 0;
+  [...$("ageChips").children].forEach(c => c.setAttribute("aria-pressed", String(c.dataset.age === "0")));
+  acquireWakeLock();
+  recompute(); rescheduleCheck(); save(); render();
+  showVerdict();
 });
 $("readTemp").addEventListener("keydown", e => { if (e.key === "Enter") $("logBtn").click(); });
 
@@ -918,20 +1143,19 @@ $("log").addEventListener("click", e => {
   const b = e.target.closest("button.del");
   if (!b) return;
   state.readings.splice(parseInt(b.dataset.i, 10), 1);
-  save(); recompute(); render();
+  recompute(); rescheduleCheck(); save(); render();
 });
 
-$("resetBtn").addEventListener("click", () => {
-  state.startedAt = null;
-  state.readings = [];
-  samples = null; plan = null;
-  save();
-  $("setup").open = true;
-  render();
-});
+$("resetBtn").addEventListener("click", startAnother);
 
 window.addEventListener("resize", () => drawChart());
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { recompute(); render(); } });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  // A wake lock is dropped whenever the page is hidden and is never restored
+  // automatically.
+  acquireWakeLock();
+  recompute(); render();
+});
 
 load();
 $("ovenC").value = state.ovenC;
@@ -939,9 +1163,11 @@ $("targetC").value = state.targetC;
 $("massKg").value = state.massKg;
 $("thickMm").value = state.thickMm;
 [...$("fanToggle").children].forEach(c => c.setAttribute("aria-pressed", String((c.dataset.fan === "1") === !!state.fan)));
-if (state.startedAt) $("setup").open = isStale();
+if (state.startedAt) $("setup").open = false;
 recompute();
+if (state.startedAt && !state.finishedAt && state.dueAt == null) { rescheduleCheck(); save(); }
 render();
+acquireWakeLock();
 
 // Tick the countdown; refit only when it matters (the posterior does not move
 // on its own, but the advice's "is it due yet" does).

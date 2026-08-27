@@ -207,11 +207,20 @@ Open <https://sjmurdoch.github.io/reverse-sear/> on the phone, then:
 4. Eventually it says **coast** and gives you a pull time. Don't open the oven
    again; take it out then.
 
+When the app says to take the steak out, **Out of the oven** records the
+estimated core at that moment and ends the cook; **Start another steak** clears
+it for the next one.
+
 Everything is kept in `localStorage`, so closing Safari, locking the phone or
 switching apps loses nothing — reopen the page and the cook picks up exactly
-where it was, with the countdown recalculated from the real elapsed time. A
-saved cook more than six hours old is flagged as finished rather than silently
-resumed. **Reset everything** in Setup clears it for the next steak.
+where it was, countdown and all, including the check time it had already
+promised. A saved cook more than six hours old is flagged as finished rather
+than silently resumed.
+
+While a cook is running the app holds a screen wake lock, because the countdown
+and its beep only run while the page is on screen. The card says which state it
+is in, and gives you the wall-clock time to set a phone timer for if the lock is
+not held.
 
 Things that keep the model honest:
 
@@ -221,6 +230,15 @@ Things that keep the model honest:
 * Sear *after* pulling, and remember the sear adds carryover: at these
   temperatures a hard sear on a 1 kg steak typically adds a couple of degrees
   at the core. If you want 44 °C after searing, aim lower here.
+
+## Usability
+
+[`COGNITIVE-WALKTHROUGHS.md`](COGNITIVE-WALKTHROUGHS.md) records structured
+walkthroughs of the app against the four cognitive-walkthrough questions, the
+defects each one found, and what changed. The first one — a busy cook juggling
+other dishes — turned up a scheduling bug bad enough to change the outcome of a
+cook: the next check was being pushed forward on every refit, so the countdown
+never reached zero and the app never asked for a second reading.
 
 ## Deployment
 
