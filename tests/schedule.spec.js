@@ -51,7 +51,8 @@ test.describe('the appointment', () => {
 
     const r = await app.read();
     expect(r.label).toMatch(/coast/i);
-    expect(r.action, 'nothing to press until the pull time').toBeNull();
+    expect(r.action, 'the pull is not offered before its time').not.toBe('Out of the oven');
+    expect(r.action, 'only the cook\'s own way out').toMatch(/out of the oven early/i);
 
     // And when it does say to take it out, the core is at temperature.
     await app.advance(s.dueMin - s.elapsedMin);
@@ -135,7 +136,9 @@ test.describe('what the card says', () => {
     expect(r.label).toMatch(/check it now/i);
     expect(r.clock).toBe('now');
     expect(r.why).toMatch(/probe/i);
-    expect(r.action, 'not time to take it out yet').toBeNull();
+    expect(r.action, 'not time to take it out yet').not.toBe('Out of the oven');
+    expect(await app.page.getAttribute('#verdictActs button', 'class'),
+      'what is there is the demoted early pull, not the recommendation').toBe('ghost');
   });
 
   // Walkthrough 3: at the first check the estimate is nearly all prior -- it was
@@ -260,7 +263,8 @@ test.describe('what the card says', () => {
     expect(r.label).toMatch(/coast/i);
     expect(r.at).toMatch(/out of the oven at/);
     expect(r.why).toMatch(/door shut|nothing left to learn/i);
-    expect(r.action, 'nothing to press until it is time').toBeNull();
+    expect(r.action, 'nothing to press until it is time, bar the cook\'s own way out')
+      .toMatch(/out of the oven early/i);
   });
 
   test('warns when the steak may never reach target', async ({ app }) => {

@@ -822,3 +822,225 @@ defect; the seventh is the counterpart, which must pass either way, and does.
 
 Run under `iphone-chromium` in a sandbox that cannot reach the Playwright CDN;
 WebKit is the gate that matters and runs in CI on the pushed commit.
+
+---
+
+## Walkthrough 6 — the guests arrive early, and the steak comes back
+
+**Persona.** Walkthrough 1's cook again: 44 °C on the probe as it leaves the
+oven, a sauce and potatoes competing for attention, wet hands, four seconds at a
+time. Trusts the countdown and does what the card says.
+
+**Scenario.** Two things this tool had never been walked through, and both are
+ordinary. The guests turn up twenty minutes early and dinner is served *now*,
+whatever the model thinks. And the pull is undone: the steak comes out, the cook
+puts a probe into it on the board, finds it under, and wants it back in the oven
+for a few minutes — the same move a mis-tap on **Out of the oven** needs, and the
+same move a cook makes when the guests turn out to be late after all.
+
+**Task stages walked.** The middle of a cook, when dinner is suddenly now → the
+pull → the board, with the steak in one hand and the probe in the other → back
+into the oven → the second pull → the rest, and the card the next morning.
+
+**How it was walked.** The physical half against `model/steak.py` as ground
+truth: a `DoorOpening` long enough to be a rest is a steak on a board, so a cook
+can be pulled, rested and put back with the fitter driven closed-loop across the
+whole thing. The interaction half in a headless iPhone context against a
+controllable clock, seeded into the states above and driven the way this cook
+drives them.
+
+**What held.** The schedule, again: the batching, the stickiness, the sweep, the
+coast. Nothing in the model needed changing. What this walkthrough found is that
+the app had no vocabulary for the cook's own decisions — it could only ever end
+a cook on its own say-so, and could never be told it was wrong.
+
+### 1. There was no way to say "it is coming out now"
+
+**Stage:** the middle of the cook, guests at the door. **Question failed:** 2,
+and 4 behind it.
+
+Thirty-eight minutes in, the card says **Next check in 5 min**. Dinner is now.
+Every button the cook can actually reach, in that state:
+
+```
+Readings: × ×      Setup: Conventional | Fan · Add another steak · Reset everything
+Dock: now | 1m ago | 2m ago · Log
+```
+
+The only one that ends the cook is **Reset everything**, at the bottom of a
+collapsed Setup panel, and it does not end the cook — it deletes it. No recorded
+temperature, no elapsed time, no rest clock, no readings: the cook who served
+their guests on time is left with a blank first-run screen. Walkthrough 1 fixed
+"there was no way to finish" for the case where the app agrees it is time; this
+is the same defect for the case where the cook decides — which is not a rare
+case, since the oven does not know when the guests sit down.
+
+**Change.** A demoted **Out of the oven early** on the card whenever a cook is
+running — ghost, worded apart from the recommendation, and recorded exactly like
+any other pull: the temperature, the elapsed time and the rest clock all behave
+as they do when the app orders it. With several steaks in, serving now is one
+decision, so the trip card offers **All out of the oven early** and takes the
+whole oven out.
+
+This deliberately revises walkthrough 2's "a coasting plan still offers no button
+before its time". What that rule was protecting against was a cook acting on the
+app's *instruction* when the instruction had gone stale — and that is untouched:
+the primary **Out of the oven** still appears only when the plan says so, and
+only on an estimate tight enough to bear it (walkthrough 5). What is new is a
+second, visibly different button that never claims the app agrees. It is also
+now recoverable, which is finding 2.
+
+### 2. The pull was a one-way door — and the way out the app offered ruined the steak
+
+**Stage:** the board, probe in hand. **Question failed:** 2, then 1 — the cook
+does the right thing physically and the app models a different steak.
+
+The finished card offered exactly one action: **Start another steak**. So a cook
+who has just probed the steak on the board and found it 3 °C short, or whose
+guests are twenty minutes away, or whose wet thumb found the button, has one
+button, and it throws the cook away: readings gone, clock zero gone, and a
+starting-temperature box asking to be filled in. What the cook types is the
+number the board probe just gave, and the app then plans for a raw steak that
+happens to start at 39 °C. Against `model/steak.py`, pulled at 40 min and back in
+after three minutes on the board:
+
+```
+the restarted app says   check in 5.8 min, 44 °C at 14.0 min [7.5-29.6]
+the truth                44 °C 4.2 min after it goes back in
+                         44.8 °C at the check it asked for
+                         50.3 °C at the time it predicted
+```
+
+Pulled at 44 min instead, it is worse: the app promises a check in five minutes,
+by which time the core is 47.6 °C. The prior it re-applies is the one thing that
+cannot be true — a 6 min dead time for a steak that has been in the oven for
+three quarters of an hour.
+
+**Change.** **Back in the oven**, on the finished card, undoing the pull: the
+same cook carries on, with the same clock zero, the same readings and the same
+posterior, because it is the same steak and that is still the best model of it.
+With several steaks, one press puts back everything that came out in the same
+action.
+
+What has changed is that the model spent some minutes heating a steak that was
+sitting on a board, so the card may not act on it: a resumed steak is marked
+`resumedAt`, and until a reading lands it says **Check it now** — *"It has been
+out of the oven and back in, and the estimate has been climbing on its own the
+whole time. Probe it and log what it says — you have just had it in your hands,
+so that reading is free."* That is walkthrough 5's rule (never order the
+irreversible action on an estimate that cannot bear it) applied to a state the
+model cannot see. Its appointment becomes *now* for the same reason, so with
+three steaks in, the trip opens rather than counting down five minutes while the
+cook stands there holding the probe.
+
+Closed-loop against `model/steak.py`, with the board probe logged as the card
+now asks, resuming costs about a degree and costs it in the safe direction:
+
+```
+pulled at   on the board   second pull   true core   error
+   30 min       4 min         49.3 min      43.5      −0.50
+   35 min       4 min         47.3 min      42.3      −1.68
+   40 min       3 min         45.5 min      43.2      −0.78
+   40 min       8 min         48.0 min      43.9      −0.11
+   44 min       6 min         50.0 min      46.7      +2.68
+```
+
+The last row is the one case the card does *not* invite: a steak that was already
+at temperature when it came out has collected its carryover on the board, and
+putting it back can only overshoot. So the invitation — *"Too raw? Put it back
+in"* — appears only when the recorded number is short of target. The button is
+there either way, because it is also the undo for a mis-tap.
+
+### 3. The card's one sentence about the rest was wrong by a factor of two
+
+**Stage:** setting the target, and resting. **Question failed:** 1, at the first
+stage of the task and again at the last.
+
+*"Rest it — the core drifts up a couple of degrees off the heat."* This persona
+picks 44 °C **because** of that sentence: the target is defined as the
+temperature on the probe at the oven door, and what lands on the plate is that
+number plus the rest. Against `model/steak.py`, resting on a board at 20 °C:
+
+```
+thickness   oven          peak rise, resting at 20 °C
+   25 mm     95 °C            +1.3 °C
+   25 mm    125 °C            +2.6 °C
+   25 mm    125 °C fan        +4.6 °C
+   40 mm     95 °C            +2.4 °C
+   40 mm    125 °C            +4.5 °C        <- the steak the app defaults to
+   40 mm    125 °C fan        +6.9 °C
+   55 mm     95 °C            +3.6 °C
+   55 mm    125 °C            +6.5 °C
+   55 mm    125 °C fan        +9.3 °C
+```
+
+"A couple of degrees" is right for a thin steak in a gentle oven and wrong for
+everything else — for the app's own default steak it is out by two degrees, and
+for a thick one in a fan oven by seven. A cook who sets 44 on that sentence and
+serves at 51 has been misled by the tool, at the one stage where it is asked for
+a number rather than a schedule.
+
+**Change.** Both places that make the claim now state the range and what drives
+it: *"two or three degrees for a thin steak from a gentle oven, five or more for
+a thick one or a fan"* — under **Target °C**, where the number is chosen, and on
+the finished card, where the steak is resting. This is not the rest-carryover
+model walkthrough 1 rejected and still rejects; it is the same sentence, made
+true.
+
+### 4. Smaller things
+
+- **The rest clock ran all night.** Left open, the finished card counted
+  *"resting 900 min"* — fifteen hours, on a card whose whole point is to be a
+  kitchen timer. It stops at 90 minutes; after that the card still says when the
+  steak came out, because that is a record and not a timer. This is the stale-state
+  defect the six-hour guard exists for, arriving at the other end of the cook.
+- **The finished number was presented as a measurement.** *"50.0 °C · at the
+  moment you pulled it"* is the model's estimate — nothing is measured at the
+  pull, and after an early pull it can be a loose one. It now says *estimated at
+  the pull*.
+- **An early pull says how short it is.** *"That is 7.5 °C short of your 44 °C
+  target"*, rather than leaving a cook with wet hands to compare two numbers on
+  two different cards.
+- **`setAction()` takes one handler per button.** It wired up only the first,
+  which is why the finished card could only ever have carried one action.
+
+### Deliberately not changed
+
+- **The time out of the oven is still not modelled.** A steak on a board is
+  treated exactly as a door opening is: the model carries on heating it. The
+  measured cost is between −0.5 and −1.7 °C, on the safe side, and the probe the
+  card asks for on the way back in removes it. Modelling the excursion would mean
+  a surface state the fitted model does not have.
+- **Still no carryover model, and still no hold-warm mode.** Finding 3 changes a
+  sentence, not the physics. When dinner is late the physically right answer is
+  still to drop the oven and hold, and that still moves the asymptote every
+  earlier reading was fitted to — recorded again as a proposal, not slipped in.
+- **The record after an early pull is still the model's estimate.** The cook is
+  standing there with a probe, and the honest thing would be to take their
+  number; but the dock belongs to a running cook, and a reading box on the
+  finished card is a second way to log readings for a state where they change
+  nothing. It is labelled as an estimate instead.
+- **"Back in the oven" is not offered for ever.** Half an hour after the pull the
+  steak is on a plate, not on a board, and the button is clutter on a card the
+  cook is using as a rest clock. It is not offered on the stale-cook card at all.
+- **Nothing was added to `advise()`.** As in walkthroughs 3 and 5, every change
+  here is the interface admitting what it does and does not know, so the
+  scheduling rule, the parity fixture and `COAST_UNDERSHOOT_C` are untouched.
+
+### Verification
+
+Four regression tests — three in `lifecycle.spec.js`, one in `multisteak.spec.js`
+— all four of which fail on the code as it was, each at the assertion that names
+the defect: the early pull offered and demoted, and recording the cook rather
+than deleting it; the pull undone, keeping the clock zero and the readings, and
+asking for a probe instead of ordering a pull; the way back withdrawn once the
+steak has been out for half an hour, and the rest clock stopping; and the whole
+oven coming out early and going back in together. Three assertions in
+`schedule.spec.js` that said "nothing to press" were rewritten to say what is now
+meant: the *recommendation* never appears before its time, and what is there is
+the cook's own demoted way out.
+
+Run under `iphone-chromium`, the fallback project: the Playwright CDN is blocked
+from this sandbox, so WebKit — the browser that matters, and the one that catches
+elements rebuilt under a finger — ran in CI on the pushed commit rather than
+here.

@@ -394,6 +394,33 @@ test.describe('the oven as a whole, not the steak on screen', () => {
     expect(r.label).not.toMatch(/ribeye/i);
   });
 
+  // Walkthrough 6. Dinner is served when the guests are at the table, not when
+  // the model is happy, and with three steaks in that is one decision.
+  test('the whole oven can come out early, and go back in', async ({ app }) => {
+    await app.seedMany(DINNER);
+    const r = await app.read();
+    expect(r.label, 'the state under test: nothing is ready').toMatch(/open the oven in/i);
+    expect(r.action).toMatch(/all out of the oven early/i);
+    expect(await app.page.getAttribute('#verdictActs button', 'class')).toBe('ghost');
+
+    const before = await app.state();
+    await app.page.click('#verdictActs button');
+    await app.settle();
+    const s = await app.state();
+    expect(s.steaks.every(x => x.finishedAt), 'every steak is out').toBe(true);
+    expect(s.steaks.every(x => x.finalTemp != null), 'each with its own number').toBe(true);
+
+    // ...and one press puts back everything that came out in the same action.
+    await app.page.click('#verdictActs button');
+    await app.settle();
+    const back = await app.state();
+    expect(back.steaks.every(x => !x.finishedAt)).toBe(true);
+    expect(back.steaks.map(x => x.startedAt)).toEqual(before.steaks.map(x => x.startedAt));
+    expect(back.steaks.map(x => x.readings.length)).toEqual(before.steaks.map(x => x.readings.length));
+    // Each is waiting on a probe now, so none of them is offered up for the pull.
+    expect((await app.rows2()).map(x => x.pill)).toEqual(['probe', 'probe', 'probe']);
+  });
+
   test('starting another cook clears the whole oven', async ({ app }) => {
     // It cleared the selected steak only. The other two stayed marked "out" for
     // ever, and a steak that has started shows no starting-temperature box, so

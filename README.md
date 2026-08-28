@@ -238,6 +238,10 @@ Things that keep the model honest:
 * Probe the same spot each time — placement error dominates instrument error.
 * Get it back in the oven inside ~30 seconds.
 * Pat the surface dry before it goes in (see the wet-bulb argument above).
+* The rest is not free either. On `model/steak.py`, a steak resting on a board
+  goes on climbing by +1.3 °C (25 mm out of a 95 °C oven) to +9.3 °C (55 mm out
+  of a 125 °C fan oven); the 40 mm, 125 °C conventional default gains +4.5 °C.
+  The target you set is the number at the oven door, not the number on the plate.
 * Sear *after* pulling, and remember the sear adds carryover: at these
   temperatures a hard sear on a 1 kg steak typically adds a couple of degrees
   at the core. If you want 44 °C after searing, aim lower here.

@@ -201,9 +201,30 @@ than removing it; removing it brings back walkthrough 1's "there was no way to
 finish" whenever the fit is loose. This is presentation only: `advise()` and the
 parity fixture know nothing about it.
 
+**Three kinds of pull, and only one of them is the app's.** The primary
+"Out of the oven" is the *recommendation*, and appears only when the plan says so
+and the estimate can bear it. "Out of the oven anyway" is the same recommendation
+demoted when the estimate is too loose (walkthrough 5). "Out of the oven early"
+is not a recommendation at all — it is the cook overruling the plan because
+dinner is now, and it is always available during a cook, ghost and worded apart.
+Walkthrough 2 argued against an always-available pull button, and that argument
+still holds for the *recommendation*: what makes the third one safe is that it is
+reversible.
+
+**The pull is reversible, and a resumed steak may not be acted on.**
+`resumeCook()` undoes a pull — the same `startedAt`, the same readings, the same
+posterior, plus every other steak that came out in the same action — because it
+is the same steak. But the model went on heating it while it sat on a board, so
+`resumedAt` is set and `awaitingProbe()` is true until a reading lands: the card
+says "Check it now", the appointment becomes *now*, and nothing irreversible may
+be ordered off that estimate. That is `SPREAD_WIDE_C`'s rule applied to a state
+the model cannot see. Setting `dueAt` there is safe for the same reason
+`adoptCoastPull()` is: it happens once, when information changes, not on a refit.
+
 **`render()` runs every second.** It must be cheap and idempotent. Anything
 rebuilt there can be replaced under the user's finger, which is why `setAction()`
-only touches the DOM when the button actually changes.
+only touches the DOM when the button actually changes. It takes one handler per
+button, in document order — the finished card carries two.
 
 ## Testing the page
 

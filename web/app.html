@@ -419,7 +419,8 @@
       <div id="extraSteaks" class="pane"></div>
       <p class="note">Target is the core temperature <strong>as it leaves the oven</strong>. If you want it
         higher on the plate, the rest and the sear add to it — set this to the number you want on the probe when
-        you open the door.</p>
+        you open the door. The rest alone is worth two or three degrees for a thin steak from a gentle oven, and
+        five or more for a thick one or a fan.</p>
       <button class="ghost" id="addBtn" type="button">Add another steak</button>
       <p class="note" id="priorNote"></p>
       <!-- The steak goes in when the oven is free; the phone is found later.
@@ -722,6 +723,14 @@ const DROP_QUERY_C = 3.0;   // a reading this far below the last one gets querie
  * breath is the card contradicting itself. */
 const SPREAD_WIDE_C = 6.0;
 
+// How long the finished card goes on counting the rest.  Past this it is a
+// record of a dinner, not a timer: a card found the next morning saying
+// "resting 900 min" is the same stale-state defect the six-hour guard exists
+// for.  And how long the way back into the oven stays on offer -- a steak that
+// has been out for half an hour is on a plate, not on a board.
+const REST_CLOCK_MIN = 90;
+const BACK_WINDOW_MIN = 30;
+
 // Returns a reason to refuse `val`, or "" to accept it.
 function readingProblem(val, ovenC) {
   if (!Number.isFinite(val)) return "Type the core temperature the probe is showing.";
@@ -785,10 +794,11 @@ const MAX_STEAKS = 3;        // the common case; three fit on one screen
  * The per-steak fields below are accessors onto the *current* steak, so every
  * rule the single-steak app already had goes on operating unchanged. */
 const PER_STEAK = ["targetC", "massKg", "thickMm", "startedAt", "dueAt",
-                   "finishedAt", "finalTemp", "readings"];
+                   "finishedAt", "finalTemp", "resumedAt", "readings"];
 const STEAK_DEFAULTS = {
   targetC: 44, massKg: 1.0, thickMm: 40,
-  startedAt: null, dueAt: null, finishedAt: null, finalTemp: null, readings: []
+  startedAt: null, dueAt: null, finishedAt: null, finalTemp: null,
+  resumedAt: null, readings: []
 };
 
 let state = { ovenC: 125, fan: false, steaks: [], current: null };
@@ -935,6 +945,7 @@ function nextOpening() {
   const tol = 30000;   // half a minute
   const orders = running.map(s => {
     const t = times.get(s.id);
+    if (awaitingProbe(s)) return { id: s.id, kind: "probe", pullAt: t.pullAt };
     if (t.pullAt <= openAt + tol) return { id: s.id, kind: "pull", pullAt: t.pullAt };
     if (t.plan.action === "measure") return { id: s.id, kind: "probe", pullAt: t.pullAt };
     return { id: s.id, kind: "optional", pullAt: t.pullAt };
@@ -1039,6 +1050,21 @@ function alarmAt() {
   return state.dueAt;
 }
 
+/**
+ * A steak that came out of the oven and went back in.
+ *
+ * The cook takes it out, probes it on the board, finds it short and puts it
+ * back -- or the guests are late, or the pull was a mis-tap. The model knows
+ * nothing about the minutes it spent on a board: it has gone on climbing the
+ * whole time, so its estimate is now the least trustworthy it has been all
+ * cook. That is walkthrough 5's situation exactly, and it gets walkthrough 5's
+ * answer: ask for the probe rather than order the pull. The cook has just had
+ * the steak in their hands, so that reading costs nothing.
+ */
+function awaitingProbe(st) {
+  return !!(st && st.resumedAt && st.startedAt && !st.finishedAt);
+}
+
 /* ------------------------------------------------------------------ *
  * Rendering
  * ------------------------------------------------------------------ */
@@ -1060,8 +1086,12 @@ function setAction(host, kind, html, handler) {
   if (host.dataset.kind === kind) return;
   host.dataset.kind = kind;
   host.innerHTML = html;
-  const b = host.querySelector("button");
-  if (b && handler) b.addEventListener("click", handler);
+  // One handler per button, in the order they appear: the finished card offers
+  // the way back into the oven beside the way on to the next dinner.
+  const hs = Array.isArray(handler) ? handler : [handler];
+  host.querySelectorAll("button").forEach((b, i) => {
+    if (hs[i]) b.addEventListener("click", hs[i]);
+  });
 }
 
 // Both the Start button and the Log button sit at the bottom of the page while
@@ -1195,15 +1225,43 @@ function render() {
     const rest = Math.floor((Date.now() - state.finishedAt) / 60000);
     $("verdictAt").textContent = "after " + Math.round((state.finishedAt - state.startedAt) / 60000) +
       " min  ·  out at " + new Date(state.finishedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
-      (rest >= 1 ? "  ·  resting " + rest + " min" : "");
-    $("verdictWhy").textContent =
-      "Rest it — the core drifts up a couple of degrees off the heat, and the sear adds more. Sear when you are ready.";
-    setAction(actsEl, several ? "again-many" : "again",
-      `<button class="ghost" type="button">${several ? "Start another cook" : "Start another steak"}</button>`,
-      startAnother);
+      (rest >= 1 && rest <= REST_CLOCK_MIN ? "  ·  resting " + rest + " min" : "");
+    // A steak taken out early is out at the cook's decision, not the model's,
+    // so the card says how far short it is rather than leaving them to compare
+    // two numbers on a card they are reading with one hand.
+    const short = state.finalTemp != null && state.finalTemp < state.targetC - 0.5;
+    // The rest is worth more than "a couple of degrees": against model/steak.py
+    // it is 1.3 °C for a 25 mm steak out of a 95 °C oven and 9.3 °C for a 55 mm
+    // one out of a 125 °C fan oven, 4.5 °C for the steak this app defaults to.
+    // The cook picks the target believing this sentence, so it has to be true.
+    const carry = "two or three degrees for a thin steak from a gentle oven, five or more for a thick one or a fan";
+    $("verdictWhy").textContent = short
+      ? `That is ${(state.targetC - state.finalTemp).toFixed(1)} °C short of your ${state.targetC} °C target, ` +
+        `and the rest is worth ${carry}. Too raw? Put it back in — the cook picks up where it left off.`
+      : `Rest it — the core keeps climbing off the heat, ${carry}, and the sear adds more. ` +
+        "Sear when you are ready.";
+    // The pull is the one irreversible action in the app, and a cook has plenty
+    // of reasons to undo it: the board probe reads under target, the guests are
+    // twenty minutes away, or a wet thumb found the button. The way back keeps
+    // the clock's zero and every reading, so the cook that resumes is the same
+    // cook -- unlike "start another", which is the only thing that used to be
+    // on this card and which throws the whole cook away.
+    const backable = Date.now() - state.finishedAt < BACK_WINDOW_MIN * 60000;
+    const back = '<button class="ghost" type="button">Back in the oven</button>';
+    const again = `<button class="ghost" type="button">${several ? "Start another cook" : "Start another steak"}</button>`;
+    // Whichever is the likely next move goes first: a steak that came out short
+    // is one the cook is deciding about now; one that came out at temperature is
+    // resting, and the next thing is the next dinner.
+    setAction(actsEl,
+      (several ? "again-many" : "again") + (backable ? (short ? "+back-first" : "+back") : ""),
+      backable && short ? back + again : backable ? again + back : again,
+      backable && short ? [resumeCook, startAnother]
+        : backable ? [startAnother, resumeCook] : [startAnother]);
     if (state.finalTemp != null) {
       $("statNow").innerHTML = state.finalTemp.toFixed(1) + '<span class="unit"> °C</span>';
-      $("statNowSpread").textContent = "at the moment you pulled it";
+      // It is the model's number, not the probe's: nothing was measured at the
+      // pull, and with an early pull it can be a loose estimate.
+      $("statNowSpread").textContent = "estimated at the pull";
     }
     drawChart();
     renderLog();
@@ -1268,11 +1326,16 @@ function render() {
   // Width alone does not decide it: an interval of 58-67 °C is wide and yet
   // says the same thing everywhere in it. What disqualifies an estimate is
   // straddling the target while being that wide.
-  const unsure = wide && nLo < state.targetC - 0.15;
+  // A steak that has been out of the oven and gone back in is in the same
+  // position as one whose phone slept through the check: the estimate has been
+  // running on unchecked, so it may ask for a probe but may not order the pull.
+  const waiting = awaitingProbe(cur());
+  const unsure = waiting || (wide && nLo < state.targetC - 0.15);
   const pastTarget = atTarget && !unsure;
 
   let label, cls;
-  if (!unsure && (plan.action === "pull" || pastTarget || (due && plan.action === "coast"))) {
+  if (waiting) { label = "Check it now"; cls = "is-due"; }
+  else if (!unsure && (plan.action === "pull" || pastTarget || (due && plan.action === "coast"))) {
     label = "Take it out now"; cls = "is-due";
   }
   else if (atTarget || due) { label = "Check it now"; cls = "is-due"; }
@@ -1285,18 +1348,25 @@ function render() {
   // removed: losing it altogether is walkthrough 1's "there was no way to
   // finish", coming back whenever the fit is loose.
   const offerPull = pullNow || (atTarget && unsure);
+  // Dinner does not wait for the model. The guests arrive, the potatoes are
+  // done, and the steak comes out on the cook's say-so -- and until now the
+  // only way to say so was "Reset everything" at the bottom of Setup, which
+  // throws the cook away rather than recording it. This is deliberately not
+  // the recommendation: ghost, differently worded, and reversible from the
+  // card it leads to.
+  const offerEarly = !offerPull;
 
   v.className = "card verdict " + cls;
   $("verdictLabel").textContent = label;
   const clockEl = $("verdictClock");
   clockEl.className = "clock";
-  clockEl.textContent = (due || atTarget) ? "now"
+  clockEl.textContent = (due || atTarget || waiting) ? "now"
     : remaining >= 2 ? Math.round(remaining) + " min"
     : fmtClock(remaining);
 
   // How late you are is the thing you most need to know when you come back to
   // an overdue steak, so say it rather than blanking the line.
-  if (due || atTarget) {
+  if (due || atTarget || waiting) {
     const late = state.dueAt ? Math.max(0, (Date.now() - state.dueAt) / 60000) : 0;
     // Before the second reading this number is nearly all prior and can be ten
     // degrees out. A bare "core about 24 °C" reads as knowledge; say how little
@@ -1317,7 +1387,9 @@ function render() {
       "  ·  " + promised.toFixed(0) + " min in";
   }
   $("verdictWhy").textContent =
-    atTarget && unsure
+    waiting
+      ? "It has been out of the oven and back in, and the estimate has been climbing on its own the whole time. Probe it and log what it says — you have just had it in your hands, so that reading is free."
+    : atTarget && unsure
       ? `The estimate has reached your target, but only to within ${nLo.toFixed(0)}–${nHi.toFixed(0)} °C — too loose to pull on. Probe it and find out.`
     : pastTarget && plan.action === "measure"
       ? "The estimate has already reached your target. Take it out, or probe it now if you want to be sure."
@@ -1340,10 +1412,11 @@ function render() {
   // second, and a tap then lands on an element that has just been detached --
   // the same defect the readings table had.
   if (activeSteaks().length <= 1) {
-    const kind = pullNow ? "out" : offerPull ? "out-unsure" : "";
+    const kind = pullNow ? "out" : offerPull ? "out-unsure" : "out-early";
     setAction(actsEl, kind,
       pullNow ? '<button class="primary" type="button">Out of the oven</button>'
-        : offerPull ? '<button class="ghost" type="button">Out of the oven anyway</button>' : "",
+        : offerPull ? '<button class="ghost" type="button">Out of the oven anyway</button>'
+        : offerEarly ? '<button class="ghost" type="button">Out of the oven early</button>' : "",
       finishCook);
   }
 
@@ -1404,7 +1477,7 @@ function renderTrip() {
   };
   const ready = running.filter(st => {
     const l = liveOf(st);
-    return l && !l.unsure && l.mid >= st.targetC - 0.15;
+    return l && !l.unsure && !awaitingProbe(st) && l.mid >= st.targetC - 0.15;
   });
   const pulls = due ? o.orders.filter(x => x.kind === "pull").map(x => steakById(x.id)) : [];
   const out = ready.length ? ready : pulls;
@@ -1452,9 +1525,14 @@ function renderTrip() {
     : due ? probeLine
       : `One trip to the oven, then everything gets probed at once.`;
 
-  setAction($("verdictActs"), out.length ? "out" : "",
-    out.length ? `<button class="primary" type="button">${out.length === running.length ? "All out of the oven" : "Out of the oven"}</button>` : "",
-    () => { for (const st of out.slice()) finishSteak(st); });
+  // Serving now is the cook's decision, not the model's, and with three steaks
+  // in the oven it is one decision: everything comes out and the dinner goes on
+  // the table. Demoted and worded apart from the call the card is making.
+  setAction($("verdictActs"), out.length ? "out" : "out-early-all",
+    out.length ? `<button class="primary" type="button">${out.length === running.length ? "All out of the oven" : "Out of the oven"}</button>`
+      : '<button class="ghost" type="button">All out of the oven early</button>',
+    out.length ? () => { for (const st of out.slice()) finishSteak(st); }
+      : () => { for (const st of activeSteaks().slice()) finishSteak(st); });
 
   $("wakeNote").classList.toggle("live", !!wakeLock);
   $("wakeNote").textContent = wakeLock
@@ -1466,6 +1544,7 @@ function finishSteak(st) {
   const f = fits.get(st.id);
   st.finalTemp = f ? pcts(f.samples.map(th => modelTemp(th, localMin(st))), [0.5])[0] : null;
   st.finishedAt = Date.now();
+  st.resumedAt = null;
   if (!activeSteaks().length) releaseWakeLock();
   const nxt = activeSteaks()[0];
   if (nxt) state.current = nxt.id;
@@ -1540,7 +1619,7 @@ function renderSteakList() {
       pill = "out"; cls = "ok";
     } else if (f) {
       const [lo95, live, hi95] = pcts(f.samples.map(th => modelTemp(th, localMin(s))), [0.05, 0.5, 0.95]);
-      const loose = hi95 - lo95 > SPREAD_WIDE_C && lo95 < s.targetC - 0.15;
+      const loose = awaitingProbe(s) || (hi95 - lo95 > SPREAD_WIDE_C && lo95 < s.targetC - 0.15);
       temp = live.toFixed(1) + " °C";
       const ready = t && Number.isFinite(t.pullAt) ? "out " + fmtWallClock(t.pullAt) : "";
       when = [ready, nth].filter(Boolean).join(" · ");
@@ -1872,6 +1951,7 @@ function startAnother() {
     st.dueAt = null;
     st.finishedAt = null;
     st.finalTemp = null;
+    st.resumedAt = null;
     st.readings = [];
   }
   state.current = (state.steaks[0] || {}).id || null;
@@ -1893,10 +1973,52 @@ function finishCook() {
   recompute();   // so the recorded temperature is the estimate right now
   state.finishedAt = Date.now();
   state.finalTemp = plan ? plan.tempNow[1] : null;
+  state.resumedAt = null;
   releaseWakeLock();
   save();
   render();
   showVerdict();
+}
+
+/**
+ * Back into the oven: the pull undone.
+ *
+ * The same cook carries on -- the clock's zero, every reading and the steak's
+ * own appointment are exactly where they were, because the steak is the same
+ * steak and the model of it is still the best one there is. What has changed is
+ * that it spent some minutes on a board while the model went on heating it, so
+ * `resumedAt` makes the card ask for a probe before it will order anything
+ * irreversible, and the reading box takes the focus so the number the cook is
+ * holding has somewhere to go.
+ */
+function resumeCook() {
+  const st = cur();
+  if (!st || !st.startedAt || !st.finishedAt) return;
+  // Everything that came out of the oven in the same action goes back in with
+  // it: with three steaks in, "all out early" is one decision and so is undoing
+  // it.  A steak pulled minutes earlier, on its own, stays out.
+  const back = state.steaks.filter(x =>
+    x.startedAt && x.finishedAt && Math.abs(x.finishedAt - st.finishedAt) < 60000);
+  for (const x of back) {
+    x.finishedAt = null;
+    x.finalTemp = null;
+    x.resumedAt = Date.now();
+  }
+  acquireWakeLock();
+  // The cook is standing over the oven with the phone in their hand: the
+  // appointment below is due the instant it is made, and beeping at someone who
+  // has just pressed the button is noise, not an alarm.
+  alarmFired = true;
+  recompute();
+  // The appointment is now: the cook is holding the steak, and the reading that
+  // re-anchors the model costs nothing while they are. Set after the refit,
+  // because a coasting steak's plan would otherwise put the promise back on its
+  // pull time (adoptCoastPull) and the trip would count down instead of opening.
+  // This is an information event, not a refit, so it walks nothing forward.
+  for (const x of back) x.dueAt = Date.now();
+  save(); render();
+  showVerdict();
+  $("readTemp").focus();
 }
 
 $("addBtn").addEventListener("click", () => {
@@ -2046,6 +2168,8 @@ $("logBtn").addEventListener("click", () => {
   const t = Math.max(last + 0.1, nowMin() - readingAge);
   state.readings.push({ t, temp: val });
   state.readings.sort((a, b) => a.t - b.t);
+  // The probe the resumed card asked for: the model is anchored again.
+  cur().resumedAt = null;
   dockNote = "";
   $("readTemp").value = "";
   readingAge = 0;
