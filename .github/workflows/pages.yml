@@ -20,6 +20,7 @@ jobs:
   model:
     name: model tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,6 +33,11 @@ jobs:
   browser:
     name: browser tests (${{ matrix.project }})
     runs-on: ubuntu-latest
+    # The whole suite runs in about two minutes. A job still going after twenty
+    # is wedged -- a browser process that never came back, not a slow test --
+    # and without this it holds the `pages` concurrency group for six hours,
+    # blocking the deploy and every run queued behind it.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
