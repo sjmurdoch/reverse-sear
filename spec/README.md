@@ -163,13 +163,23 @@ java.util.NoSuchElementException: key not found: $C$8
   at ...bmcmt.rules.FoldSetRule.apply(FoldSetRule.scala:84)
 ```
 
-`FoldSetRule` substitutes the lambda's parameters with arena cell names and then
-`SetInRule` tries to resolve one of those cells as a bound name, which is not in
-the binding. The trigger needs all three parts — a set **constructor**, under
-**`contains`** (or `in`), inside a **`fold`** lambda. Each of these is fine:
-the same membership test under `map`, `filter` or `exists`; `union`, `subseteq`
-or `size` on a constructor inside a fold; `contains` inside a fold against a set
-held in a state variable rather than built on the spot.
+`FoldSetRule` inlines the fold's lambda by substituting its parameters with
+arena cell names. `SetInRule` then has a fast path for membership in a
+*singleton* set literal, which treats `x \in {y}` as `x = y` and resolves the
+left-hand side straight out of the binding rather than rewriting it — and a cell
+name is never in the binding, so it throws.
+
+The trigger therefore needs three things at once: a fold's lambda parameter on
+the left, `contains` (or `in`), and a **singleton** set literal on the right.
+Changing `Set(1)` to `Set(1, 3)` is enough to make it check cleanly. So is the
+same membership test under `map`, `filter` or `exists`; `union`, `subseteq` or
+`size` on a literal inside a fold; or `contains` against a set held in a state
+variable. It bites `foldl` as well as `fold`, and the accumulator as well as the
+element.
+
+`spec/apalache-bug/` has a thirteen-line TLA+ reproducer with no Quint in it, the
+`BugReport.md` Apalache generated, and `ISSUE.md` — the whole thing written up
+ready to submit upstream, which has **not** been submitted.
 
 This spec walks straight into it, because `mapReschedule` folds over the steaks
 and asks `scope.contains(i)` inside the fold. It bit exactly the actions that

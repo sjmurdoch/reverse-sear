@@ -198,9 +198,10 @@ module app {
   }
 
   // Callers must bind `scope` to a `val` rather than passing `Set(...)` inline.
-  // The `scope.contains(i)` below sits inside a fold, and a set *constructor*
-  // under `contains` inside a fold crashes Apalache -- so an inline set literal
-  // here stops `quint verify` dead while leaving `quint run` perfectly happy.
+  // The `scope.contains(i)` below sits inside a fold, and a *singleton* set
+  // literal under `contains` inside a fold crashes Apalache -- and every scope
+  // passed here is a singleton.  An inline `Set(...)` stops `quint verify` dead
+  // while leaving `quint run` perfectly happy.
   // spec/apalache-foldset-bug.qnt is the five-line reproducer.
   pure def mapReschedule(m: int -> Steak, ids: Set[int], scope: Set[int], now: int): int -> Steak =
     ids.fold(m, (acc, i) => acc.set(i, reschedule1(acc.get(i), now, scope.contains(i))))
