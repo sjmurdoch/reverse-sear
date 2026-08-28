@@ -197,6 +197,11 @@ module app {
     else s.with("dueAt", fresh).with("dueSetAt", now)
   }
 
+  // Callers must bind `scope` to a `val` rather than passing `Set(...)` inline.
+  // The `scope.contains(i)` below sits inside a fold, and a set *constructor*
+  // under `contains` inside a fold crashes Apalache -- so an inline set literal
+  // here stops `quint verify` dead while leaving `quint run` perfectly happy.
+  // spec/apalache-foldset-bug.qnt is the five-line reproducer.
   pure def mapReschedule(m: int -> Steak, ids: Set[int], scope: Set[int], now: int): int -> Steak =
     ids.fold(m, (acc, i) => acc.set(i, reschedule1(acc.get(i), now, scope.contains(i))))
 
@@ -208,6 +213,8 @@ module app {
   // Did an event about *these* steaks disturb an appointment belonging to some
   // other steak?  A steak that had no appointment is exempt: rescheduleCheck()
   // gives one to any steak that somehow lacks it, in or out of scope.
+  // `scope` is bound to a val by every caller, for the reason mapReschedule
+  // gives below -- though `exists` happens not to trip the same Apalache bug.
   pure def disturbedOutside(before: int -> Steak, after: int -> Steak,
                             ids: Set[int], scope: Set[int]): bool =
     ids.exists(j => not(scope.contains(j))
@@ -404,7 +411,12 @@ module app {
       .with("resumedAt", NONE)                 // the probe the resumed card asked for
       .with("hitMin", h).with("guardMin", g)
       .with("pullMin", if (h >= INF) INF else imax(h - 1, 0))
-    val scope = if (BUG_RESCHEDULE_EVERY_STEAK) present else Set(i)
+    // `owned` is the scope the *rule* allows -- this steak and no other -- and
+    // is what the ghost below is measured against, so turning the defect on
+    // cannot also move the goalposts.  Both are bound to a val rather than
+    // written inline: see the Apalache note in spec/README.md.
+    val owned = Set(i)
+    val scope = if (BUG_RESCHEDULE_EVERY_STEAK) present else owned
     val after = mapReschedule(
       mapRecompute(steaks.set(i, probed), present, clock), present, scope, clock)
     all {
@@ -415,7 +427,7 @@ module app {
       // One trip is one sweep: the reading goes on the steak in hand.
       current' = i,
       seen' = seen.with("disturbedNeighbour", seen.disturbedNeighbour
-        or disturbedOutside(steaks, after, present, Set(i))),
+        or disturbedOutside(steaks, after, present, owned)),
       present' = present, ovenC' = ovenC, fan' = fan
     }
   }
@@ -430,8 +442,9 @@ module app {
       .with("reads", steaks.get(i).reads - 1)
       .with("hitMin", h).with("guardMin", g)
       .with("pullMin", if (h >= INF) INF else imax(h - 1, 0))
+    val scope = Set(current)
     val after = mapReschedule(
-      mapRecompute(steaks.set(i, cut), present, clock), present, Set(current), clock)
+      mapRecompute(steaks.set(i, cut), present, clock), present, scope, clock)
     all {
       i == current,
       running.contains(i),
@@ -440,7 +453,7 @@ module app {
       steaks' = after,
       alarmFired' = ringingIn(after, clock),
       seen' = seen.with("disturbedNeighbour", seen.disturbedNeighbour
-        or disturbedOutside(steaks, after, present, Set(current))),
+        or disturbedOutside(steaks, after, present, scope)),
       present' = present, current' = current, ovenC' = ovenC, fan' = fan
     }
   }
@@ -450,8 +463,9 @@ module app {
   // leaving, so their promised checks stand.
   action pullOut(i: int): bool = {
     val out = steaks.get(i).with("finishedAt", clock).with("resumedAt", NONE)
+    val scope = Set(i)
     val m = steaks.set(i, out)
-    val after = mapReschedule(mapRecompute(m, present, clock), present, Set(i), clock)
+    val after = mapReschedule(mapRecompute(m, present, clock), present, scope, clock)
     val stillIn = present.filter(j =>
       m.get(j).startedAt != NONE and m.get(j).finishedAt == NONE)
     all {
@@ -464,7 +478,7 @@ module app {
       seen' = seen
         .with("blindPull", seen.blindPull or awaitingProbe(i))
         .with("disturbedNeighbour", seen.disturbedNeighbour
-          or disturbedOutside(steaks, after, present, Set(i))),
+          or disturbedOutside(steaks, after, present, scope)),
       present' = present, ovenC' = ovenC, fan' = fan
     }
   }
@@ -474,8 +488,9 @@ module app {
   // and safe because it is reversible.
   action pullEarly(i: int): bool = {
     val out = steaks.get(i).with("finishedAt", clock).with("resumedAt", NONE)
+    val scope = Set(i)
     val m = steaks.set(i, out)
-    val after = mapReschedule(mapRecompute(m, present, clock), present, Set(i), clock)
+    val after = mapReschedule(mapRecompute(m, present, clock), present, scope, clock)
     val stillIn = present.filter(j =>
       m.get(j).startedAt != NONE and m.get(j).finishedAt == NONE)
     all {
@@ -486,7 +501,7 @@ module app {
         if (stillIn.size() > 0) stillIn.fold(MAX_STEAKS + 1, (a, j) => imin(a, j)) else current,
       alarmFired' = ringingIn(after, clock),
       seen' = seen.with("disturbedNeighbour", seen.disturbedNeighbour
-        or disturbedOutside(steaks, after, present, Set(i))),
+        or disturbedOutside(steaks, after, present, scope)),
       present' = present, ovenC' = ovenC, fan' = fan
     }
   }
@@ -564,14 +579,15 @@ module app {
 
   // A steak's own fields are new information about that steak alone.
   action editSteakField = {
+    val scope = Set(firstSteak)
     val after =
-      mapReschedule(mapRecompute(steaks, present, clock), present, Set(firstSteak), clock)
+      mapReschedule(mapRecompute(steaks, present, clock), present, scope, clock)
     all {
       clock' = clock,
       steaks' = after,
       alarmFired' = ringingIn(after, clock),
       seen' = seen.with("disturbedNeighbour", seen.disturbedNeighbour
-        or disturbedOutside(steaks, after, present, Set(firstSteak))),
+        or disturbedOutside(steaks, after, present, scope)),
       present' = present, current' = current, ovenC' = ovenC, fan' = fan
     }
   }

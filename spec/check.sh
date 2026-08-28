@@ -2,8 +2,13 @@
 # Check spec/steak.qnt: every invariant on the app as it stands, then one
 # deliberately broken module per invariant to show that it bites.
 #
-#   sh spec/check.sh            random simulation (seconds)
-#   sh spec/check.sh verify     Apalache, symbolic and exhaustive to --max-steps
+#   sh spec/check.sh            random simulation (~3 minutes)
+#   sh spec/check.sh verify     Apalache, exhaustive but only to depth 1
+#
+# The verify mode is shallow on purpose: depth 1 takes about 40 s per invariant
+# and depth 2 did not finish in 40 minutes.  It also depends on the `val`
+# bindings in steak.qnt that work around an Apalache bug -- spec/README.md and
+# spec/apalache-foldset-bug.qnt have the detail.
 #
 # Quint is not a repo dependency; see spec/README.md for the one-line install.
 set -e
@@ -13,6 +18,7 @@ SPEC="$(dirname "$0")/steak.qnt"
 MODE="${1:-run}"
 STEPS="${STEPS:-14}"
 SAMPLES="${SAMPLES:-3000}"
+VERIFY_STEPS="${VERIFY_STEPS:-1}"
 # A "must hold" check only needs breadth; a "must be caught" check has to
 # actually find its counterexample, and the blind pull needs pull, resume and
 # pull again in one trace.
@@ -34,7 +40,7 @@ BITE="scheduleIsSticky:bug_refit_reschedules \
 
 check() { # module invariant steps samples -> 0 if the invariant held
   if [ "$MODE" = "verify" ]; then
-    $QUINT verify --main="$1" --invariant="$2" --max-steps="$3" "$SPEC" >/dev/null 2>&1
+    $QUINT verify --main="$1" --invariant="$2" --max-steps="$VERIFY_STEPS" "$SPEC" >/dev/null 2>&1
   else
     $QUINT run --backend=typescript --main="$1" --invariant="$2" \
       --max-steps="$3" --max-samples="$4" --verbosity=0 "$SPEC" >/dev/null 2>&1
@@ -51,6 +57,13 @@ for inv in $HOLD; do
     printf '  VIOLATED  %s\n' "$inv"; fail=1
   fi
 done
+
+echo
+if [ "$MODE" = "verify" ]; then
+  echo
+  echo "  (exhaustive to depth $VERIFY_STEPS; a defect needing a longer trace"
+  echo "   will not be reached -- see spec/README.md)"
+fi
 
 echo
 echo "== broken modules: these must be caught =="

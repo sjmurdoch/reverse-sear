@@ -29,7 +29,12 @@ sh spec/check.sh                       # every invariant, plus the broken module
 quint test --backend=typescript --main=reverse_sear spec/steak.qnt
 quint run  --backend=typescript --main=reverse_sear \
       --invariant=scheduleIsSticky --max-steps=20 spec/steak.qnt
+quint verify --main=reverse_sear --invariant=scheduleIsSticky --max-steps=1 spec/steak.qnt
 ```
+
+The last one is exhaustive rather than sampled, but only to depth 1 in about
+40 seconds -- see Apalache below for why, and for the `val` bindings in
+`steak.qnt` that exist solely to keep it working.
 
 Pass `--backend=typescript` to `run` and `test`. Quint 0.32 defaults to a Rust
 evaluator it downloads from GitHub releases on first use, which fails behind an
@@ -131,32 +136,76 @@ phone silent while a check is overdue — for the case that fix does not cover:
 not two steaks in the oven, but one in and one merely on the list. It is left
 unfixed here because this spec was asked for, not a change to the app.
 
-## Apalache
+## Apalache, and the one thing the spec is written around
 
-`quint verify` (the symbolic model checker) fails on this spec with an internal
-error, `key not found: $C$7`, raised while translating `deleteReading`,
-`pullOut`, `pullEarly` and `editSteakField`. It is not a spec error — those four
-typecheck and simulate — and it is not the module constants or the
-nondeterministic draws; both were ruled out by bisection. To reproduce:
+`quint verify` — the symbolic model checker — used to fail on this spec with an
+internal error, `key not found: $C$7`, and `check.sh` therefore uses `quint run`
+instead. That error is now understood and worked around, and
+`spec/apalache-foldset-bug.qnt` is a five-line reproducer:
 
 ```bash
-quint verify --main=reverse_sear --invariant=scheduleIsSticky --max-steps=4 spec/steak.qnt
+quint verify --main=broken --invariant=inv --max-steps=2 spec/apalache-foldset-bug.qnt
+# error: key not found: $C$8
+quint verify --main=works  --invariant=inv --max-steps=2 spec/apalache-foldset-bug.qnt
+# [ok] No violation found
 ```
 
-So `check.sh` uses `quint run`'s randomized simulation, which samples traces
-rather than exhausting them. Coverage is therefore good but not a proof: the
-`noPullOffAStaleEstimate` counterexample needs pull → resume → pull in one
-trace, and only turns up at `--max-steps=20 --max-samples=20000`, which is why
-the broken-module checks search deeper than the ones that must hold.
+The two modules differ by one `val` binding. It is an Apalache bug, not a Quint
+one and not a spec error: both modules typecheck and both simulate, and Apalache
+prints "Please report an issue" and writes a `BugReport.md`. Running Apalache
+directly on the compiled TLA+ gives the stack:
 
-The other ten actions (`driftTick`, `refitTick`, `startCook`, `logReading`,
-`resumeCook`, `startAnother`, `addSteak`, `removeSteak`, `editOven`,
-`selectSteak`) translate without the internal error — each was checked against
-that base at `--max-steps=2` — but that is as far as this got: all ten together
-at `--max-steps=4` had not finished after fifteen minutes. So there is no
-exhaustive result here at any useful depth, only the bisection showing where the
-translation breaks. Worth revisiting when Apalache or the Quint-to-Apalache
-translation moves on.
+```
+java.util.NoSuchElementException: key not found: $C$8
+  at ...bmcmt.Binding.apply(Binding.scala:11)
+  at ...bmcmt.rules.SetInRule.apply(SetInRule.scala:40)
+  at ...bmcmt.rules.FoldSetRule.$anonfun$apply$1(FoldSetRule.scala:99)
+  at ...bmcmt.rules.FoldSetRule.apply(FoldSetRule.scala:84)
+```
+
+`FoldSetRule` substitutes the lambda's parameters with arena cell names and then
+`SetInRule` tries to resolve one of those cells as a bound name, which is not in
+the binding. The trigger needs all three parts — a set **constructor**, under
+**`contains`** (or `in`), inside a **`fold`** lambda. Each of these is fine:
+the same membership test under `map`, `filter` or `exists`; `union`, `subseteq`
+or `size` on a constructor inside a fold; `contains` inside a fold against a set
+held in a state variable rather than built on the spot.
+
+This spec walks straight into it, because `mapReschedule` folds over the steaks
+and asks `scope.contains(i)` inside the fold. It bit exactly the actions that
+passed a set literal at the call site — `deleteReading`, `pullOut`, `pullEarly`,
+`editSteakField` — and spared `logReading` and `startCook`, which happened to
+bind their scope to a `val` first, and `editOven`, which passes the state
+variable `present`.
+
+**So every call site now binds the scope to a `val` first**, which becomes a
+LET-IN and survives to the backend. That is the only reason those bindings
+exist; without this note they look like pointless indirection. A module-level
+`pure val` does *not* work — Quint inlines it and the constructor is back. In
+`logReading` there are two bindings rather than one: `owned` is the scope the
+rule allows, and is what the ghost is measured against, while `scope` is what is
+actually passed and may be widened by `BUG_RESCHEDULE_EVERY_STEAK`. Collapsing
+them blinds the detector, which is what the "must be caught" half of `check.sh`
+is for — it caught exactly that mistake.
+
+With the workaround in place `verify` runs. `--max-steps=1` completes in about
+40 seconds:
+
+```bash
+quint verify --main=reverse_sear --invariant=scheduleIsSticky --max-steps=1 spec/steak.qnt
+# [ok] No violation found (36160ms)
+```
+
+Depth 2 is another matter: it had not finished after 15 minutes, so `check.sh`
+defaults `verify` to depth 1 and otherwise uses `quint run`.
+Its randomized simulation samples traces rather than exhausting them: the
+`noPullOffAStaleEstimate` counterexample needs pull → resume → pull in one trace
+and only turns up at `--max-steps=20 --max-samples=20000`, which is why the
+broken-module checks search deeper than the ones that must hold.
+
+The `--backend=tlc` route is worse, not better: TLC dodges the Apalache bug, but
+explicit-state exploration of this spec passed 1.4 million distinct states at
+depth 10 and was still growing. `clock` alone ranges over `HORIZON`.
 
 ## Keeping it in step
 

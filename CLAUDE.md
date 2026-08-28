@@ -146,7 +146,10 @@ when a reading arrives and frozen otherwise, which is exactly the property
 `adoptCoastPull()` depends on. `spec/README.md` says what is and is not modelled.
 
 It is a companion to the browser tests, not a replacement, and **it is not in
-CI**: Quint is not a dependency and nothing gates on it. Playwright still checks
+CI**: Quint is not a dependency and nothing gates on it. The `val` bindings that
+hold each `rescheduleCheck` scope in `steak.qnt` are not stylistic -- they work
+around an Apalache bug that otherwise stops `quint verify` dead, and
+`spec/apalache-foldset-bug.qnt` is the five-line reproducer. Playwright still checks
 what the page does; this checks what the state machine cannot do. If you change
 the scheduling rule or the shared constants, change them in `spec/steak.qnt` too
 -- nothing but reading holds them together.
