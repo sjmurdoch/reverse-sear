@@ -206,8 +206,9 @@ quint verify --main=reverse_sear --invariant=scheduleIsSticky --max-steps=1 spec
 # [ok] No violation found (36160ms)
 ```
 
-Depth 2 is another matter: it had not finished after 15 minutes, so `check.sh`
-defaults `verify` to depth 1 and otherwise uses `quint run`.
+Depth 2 is another matter: it ran for forty minutes without finishing and was
+killed at that. So `check.sh` defaults `verify` to depth 1 and otherwise uses
+`quint run`.
 Its randomized simulation samples traces rather than exhausting them: the
 `noPullOffAStaleEstimate` counterexample needs pull → resume → pull in one trace
 and only turns up at `--max-steps=20 --max-samples=20000`, which is why the
