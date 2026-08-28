@@ -25,6 +25,9 @@ python3 model/validate.py 40      # wide closed-loop validation (slow: ~4 s per 
 python3 web/build.py              # regenerate web/index.html from web/app.html
 python3 web/build.py --out _site/index.html    # what CI does
 npm run parity:update             # after changing model/fit.py -- see Parity below
+
+npm install --no-save @informalsystems/quint@0.32.0   # not a dependency
+sh spec/check.sh                  # the state machine's invariants (~3 min)
 ```
 
 No linter. `.github/workflows/pages.yml` gates the deploy on the Python tests
@@ -130,6 +133,29 @@ One deliberate asymmetry: for a `coast`, the JS puts the pull time in `next`
 (the card counts down to it) while Python keeps the unused safe-check time in
 `next_check_min` and the pull in `pull_min`. Compare `pull` for coast, `next`
 for measure.
+
+### The state machine is written out separately, in Quint
+
+`spec/steak.qnt` is the app's scheduling and lifecycle logic as a
+[Quint](https://quint-lang.org) state machine, and `spec/check.sh` checks the
+rules this file states in prose -- stickiness, appointment ownership, the trip,
+the pull and its undo -- against it, then against one deliberately broken module
+per rule so none of them holds vacuously. The physics is an oracle there: what
+the schedule reads out of the posterior is three times, drawn nondeterministically
+when a reading arrives and frozen otherwise, which is exactly the property
+`adoptCoastPull()` depends on. `spec/README.md` says what is and is not modelled.
+
+It is a companion to the browser tests, not a replacement, and **it is not in
+CI**: Quint is not a dependency and nothing gates on it. Playwright still checks
+what the page does; this checks what the state machine cannot do. If you change
+the scheduling rule or the shared constants, change them in `spec/steak.qnt` too
+-- nothing but reading holds them together.
+
+One invariant there is knowingly red, and `spec/README.md` has the detail: with
+one steak cooking and a second added but not started, tapping the second one's
+glance row points `state.current` at a steak with no cook, `render()` returns at
+"Set up your steak" before the alarm is checked, and `alarmAt()` falls through to
+that steak's null `dueAt`. The overdue steak's check passes in silence.
 
 ### Three layers
 
