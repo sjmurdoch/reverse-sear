@@ -30,13 +30,18 @@ BITE_SAMPLES="${BITE_SAMPLES:-20000}"
 # do not hold of the app as it stands.  See spec/README.md.
 HOLD="alwaysASteak atMostMaxSteaks scheduleIsSticky startSparesRunningSteaks \
       noPullOffAStaleEstimate appointmentsAreOwned tripIsNeverLate alarmIsNotLate \
-      coastPromiseIsAnchored gapsAreRespected"
+      coastPromiseIsAnchored gapsAreRespected tripIsAttained \
+      finishedHoldNoAppointment blindFractionRespected resumeKeepsTheCook"
 
 BITE="scheduleIsSticky:bug_refit_reschedules \
       startSparesRunningSteaks:bug_start_restarts_running \
       noPullOffAStaleEstimate:bug_pull_when_awaiting_probe \
       alarmIsNotLate:bug_alarm_follows_selection \
-      appointmentsAreOwned:bug_reschedule_every_steak"
+      appointmentsAreOwned:bug_reschedule_every_steak \
+      tripIsAttained:bug_trip_opens_early \
+      finishedHoldNoAppointment:bug_keep_appointment_after_pull \
+      blindFractionRespected:bug_ignore_blind_cap \
+      resumeKeepsTheCook:bug_resume_restarts"
 
 check() { # module invariant steps samples -> 0 if the invariant held
   if [ "$MODE" = "verify" ]; then

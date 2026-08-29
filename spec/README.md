@@ -87,9 +87,20 @@ deliberately broken module per invariant, so none of them holds vacuously.
 | `alarmIsNotLate` | when the alarm is evaluated, it is set no later than any steak's appointment |
 | `coastPromiseIsAnchored` | `adoptCoastPull()`'s post-condition, which is what makes it idempotent |
 | `gapsAreRespected` | a measurement check sits `MIN_GAP_MIN`–`MAX_GAP_MIN` after it was made |
+| `tripIsAttained` | the trip is *some* steak's own appointment, not an invented time |
+| `finishedHoldNoAppointment` | a steak on the board stops dragging the trip earlier |
+| `blindFractionRespected` | `MAX_BLIND_FRACTION`: never blind for more than 55% of the way to the finish |
+| `resumeKeepsTheCook` | `resumeCook()` gives back the same steak — same zero, readings, posterior |
+
+`tripIsNeverLate` and `tripIsAttained` are worth reading together: the first
+says the trip is no later than any steak's appointment, the second that it is
+exactly one of them. Either alone is satisfiable by something silly — opening
+the oven immediately and forever satisfies the first — and together they pin
+`openAt` to `min(dueAt)`, which is the whole batching rule.
 
 The broken modules turn on exactly one defect each. Four of them are the
-historical bugs CLAUDE.md records; running `check.sh` shows each being caught:
+historical bugs CLAUDE.md records; the rest are defects the rules forbid but
+which have not actually happened. Running `check.sh` shows each being caught:
 
 | module | invariant it must break |
 |---|---|
@@ -98,6 +109,10 @@ historical bugs CLAUDE.md records; running `check.sh` shows each being caught:
 | `bug_start_restarts_running` | `startSparesRunningSteaks` |
 | `bug_alarm_follows_selection` | `alarmIsNotLate` |
 | `bug_pull_when_awaiting_probe` | `noPullOffAStaleEstimate` |
+| `bug_trip_opens_early` | `tripIsAttained` |
+| `bug_keep_appointment_after_pull` | `finishedHoldNoAppointment` |
+| `bug_ignore_blind_cap` | `blindFractionRespected` |
+| `bug_resume_restarts` | `resumeKeepsTheCook` |
 
 ## One invariant that does not hold: the silent alarm
 

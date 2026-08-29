@@ -138,9 +138,12 @@ for measure.
 
 `spec/steak.qnt` is the app's scheduling and lifecycle logic as a
 [Quint](https://quint-lang.org) state machine, and `spec/check.sh` checks the
-rules this file states in prose -- stickiness, appointment ownership, the trip,
-the pull and its undo -- against it, then against one deliberately broken module
-per rule so none of them holds vacuously. The physics is an oracle there: what
+rules this file states in prose -- stickiness, appointment ownership, the trip
+and that it is one steak's own appointment rather than an invented time, the
+`MAX_BLIND_FRACTION` cap, a pulled steak no longer dragging the trip earlier,
+and the pull and its undo -- against it, then against one deliberately broken
+module per rule so none of them holds vacuously. Fourteen invariants, nine
+defect modules. The physics is an oracle there: what
 the schedule reads out of the posterior is three times, drawn nondeterministically
 when a reading arrives and frozen otherwise, which is exactly the property
 `adoptCoastPull()` depends on. `spec/README.md` says what is and is not modelled.

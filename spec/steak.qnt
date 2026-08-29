@@ -89,6 +89,24 @@ module app {
   // board while the model went on heating it.
   const BUG_PULL_WHEN_AWAITING_PROBE: bool
 
+  // The trip opens before the earliest steak actually asked for it: still safe,
+  // but every steak is probed sooner than it needed to be, which is a wasted
+  // trip to the oven -- the one cost the whole schedule exists to minimise.
+  const BUG_TRIP_OPENS_EARLY: bool
+
+  // A steak that has come out keeps the appointment it held, so a steak resting
+  // on a board goes on pulling the trip earlier for everything still inside.
+  const BUG_KEEP_APPOINTMENT_AFTER_PULL: bool
+
+  // advise() drops the MAX_BLIND_FRACTION cap and aims only at the guard time,
+  // so a badly wrong fit is discovered at the end instead of being corrected
+  // early.
+  const BUG_IGNORE_BLIND_CAP: bool
+
+  // resumeCook() treats the steak as a new cook rather than the same one --
+  // a fresh zero and its readings thrown away.
+  const BUG_RESUME_RESTARTS: bool
+
   //--------------------------------------------------------------------------
   // A steak.
   //--------------------------------------------------------------------------
@@ -139,7 +157,9 @@ module app {
     val latestUseful =
       if (s.hitMin >= INF) n + MAX_GAP_MIN
       else n + (BLIND_NUM * imax(s.hitMin - n, 0)) / BLIND_DEN
-    val capped = imin(imin(s.guardMin, latestUseful), n + MAX_GAP_MIN)
+    val capped =
+      if (BUG_IGNORE_BLIND_CAP) imin(s.guardMin, n + MAX_GAP_MIN)
+      else imin(imin(s.guardMin, latestUseful), n + MAX_GAP_MIN)
     imax(capped, n + MIN_GAP_MIN)
   }
 
@@ -192,7 +212,9 @@ module app {
   // appointment it has; one that somehow has none gets a fresh one either way.
   pure def reschedule1(s: Steak, now: int, inScope: bool): Steak = {
     val fresh =
-      if (fittedS(s) and s.finishedAt == NONE) s.startedAt + s.cNext else NONE
+      if (fittedS(s) and (BUG_KEEP_APPOINTMENT_AFTER_PULL or s.finishedAt == NONE))
+        s.startedAt + s.cNext
+      else NONE
     if (not(inScope) and s.dueAt != NONE) s
     else s.with("dueAt", fresh).with("dueSetAt", now)
   }
@@ -205,6 +227,17 @@ module app {
   // spec/apalache-foldset-bug.qnt is the five-line reproducer.
   pure def mapReschedule(m: int -> Steak, ids: Set[int], scope: Set[int], now: int): int -> Steak =
     ids.fold(m, (acc, i) => acc.set(i, reschedule1(acc.get(i), now, scope.contains(i))))
+
+  // resumeCook() undoes a pull, so what comes back is the *same* steak: the
+  // same zero, the same readings, the same posterior.  Only finishedAt,
+  // resumedAt and the appointment may differ.
+  pure def sameCook(before: Steak, after: Steak): bool = and {
+    after.startedAt == before.startedAt,
+    after.reads     == before.reads,
+    after.guardMin  == before.guardMin,
+    after.hitMin    == before.hitMin,
+    after.pullMin   == before.pullMin
+  }
 
   // A refit may move an appointment only in adoptCoastPull's one sanctioned way.
   pure def unsanctionedMove(before: Steak, after: Steak): bool =
@@ -236,10 +269,10 @@ module app {
   // Ghosts.  Each latches: once a defect has been observed it stays observed,
   // so the invariants below are plain safety properties.
   var seen: { walkedForward: bool, restartedRunning: bool, blindPull: bool,
-              disturbedNeighbour: bool }
+              disturbedNeighbour: bool, brokeResume: bool }
 
   pure val noDefect = { walkedForward: false, restartedRunning: false, blindPull: false,
-                        disturbedNeighbour: false }
+                        disturbedNeighbour: false, brokeResume: false }
 
   //--------------------------------------------------------------------------
   // Derived state.
@@ -277,7 +310,12 @@ module app {
   val planned: Set[int] = running.filter(i => steaks.get(i).cAdvice != "none")
 
   // nextOpening(): the trip is the earliest appointment any steak still holds.
-  val openAt: int = planned.fold(INF, (acc, i) => imin(acc, dueAtOf(i)))
+  // Not merely no later than all of them -- exactly one of them, or the door
+  // opens for nothing.
+  val openAt: int = {
+    val earliest = planned.fold(INF, (acc, i) => imin(acc, dueAtOf(i)))
+    if (BUG_TRIP_OPENS_EARLY and planned.size() > 0) earliest - MIN_GAP_MIN else earliest
+  }
 
   // alarmAt().  With several steaks in, the card counts down to the trip, so
   // the alarm must ring at the same moment the card is counting down to.
@@ -518,7 +556,10 @@ module app {
       s.startedAt != NONE and s.finishedAt != NONE and s.finishedAt == ref
     })
     val m = back.fold(steaks, (acc, j) =>
-      acc.set(j, acc.get(j).with("finishedAt", NONE).with("resumedAt", clock)))
+      acc.set(j, if (BUG_RESUME_RESTARTS)
+                   acc.get(j).with("finishedAt", NONE).with("resumedAt", clock)
+                             .with("startedAt", clock).with("reads", 1)
+                 else acc.get(j).with("finishedAt", NONE).with("resumedAt", clock)))
     // The appointment is set *after* the refit: a coasting steak's plan would
     // otherwise put the promise back on its pull time and the trip would count
     // down instead of opening.
@@ -535,7 +576,9 @@ module app {
       // Beeping at someone who has just pressed the button is noise, not an
       // alarm.
       alarmFired' = true,
-      present' = present, ovenC' = ovenC, fan' = fan, seen' = seen
+      seen' = seen.with("brokeResume", seen.brokeResume
+        or back.exists(j => not(sameCook(steaks.get(j), after.get(j))))),
+      present' = present, ovenC' = ovenC, fan' = fan
     }
   }
 
@@ -698,11 +741,55 @@ module app {
         s.dueAt >= s.dueSetAt + MIN_GAP_MIN and s.dueAt <= s.dueSetAt + MAX_GAP_MIN
       })
 
+  // "The door opens at the earliest of them": the trip is one steak's own
+  // appointment, not a time of the schedule's invention.  `tripIsNeverLate`
+  // alone would be satisfied by opening the oven immediately and forever; the
+  // two together pin the trip to exactly min(dueAt).  Opening earlier than any
+  // steak asked for is a wasted trip, and trips are the thing being minimised.
+  val tripIsAttained =
+    (planned.size() > 0) implies planned.exists(i => openAt == dueAtOf(i))
+
+  // "Adding, removing or pulling a steak re-plans nothing."  A steak that has
+  // come out holds no appointment: it is resting on a board, and must not go on
+  // dragging the trip earlier for the steaks still in the oven.
+  val finishedHoldNoAppointment =
+    present.filter(i => steaks.get(i).startedAt != NONE
+                        and steaks.get(i).finishedAt != NONE)
+      .forall(i => steaks.get(i).dueAt == NONE)
+
+  // "Never blindly wait more than 55% of the remaining predicted time, so a
+  // badly wrong fit gets corrected early rather than discovered at the end."
+  // The third bound in advise(), which `gapsAreRespected` does not cover: it
+  // checks MIN_GAP_MIN and MAX_GAP_MIN but not the fraction between them.
+  // Measured from when the appointment was made, and the MIN_GAP_MIN floor is
+  // allowed to win -- advise() applies it last, on purpose.
+  val blindFractionRespected =
+    planned.filter(i => advice(i) == "measure"
+                        and not(awaitingProbe(i))
+                        and steaks.get(i).dueAt != NONE
+                        and steaks.get(i).dueSetAt != NONE
+                        and steaks.get(i).hitMin < INF)
+      .forall(i => {
+        val s = steaks.get(i)
+        val hitAt = s.startedAt + s.hitMin
+        val cap = (BLIND_NUM * imax(hitAt - s.dueSetAt, 0)) / BLIND_DEN
+        s.dueAt <= s.dueSetAt + imax(cap, MIN_GAP_MIN)
+      })
+
+  // "resumeCook() undoes a pull -- the same startedAt, the same readings, the
+  // same posterior -- because it is the same steak."  The other half of the
+  // reversible pull: `noPullOffAStaleEstimate` says what may not be *ordered*
+  // off a resumed steak, this says the resumed steak is still the one that went
+  // in.  A fresh zero here would silently discard the whole cook.
+  val resumeKeepsTheCook = not(seen.brokeResume)
+
   // The suite that must hold.
   val allInvariants = and {
     alwaysASteak, atMostMaxSteaks, scheduleIsSticky, startSparesRunningSteaks,
     noPullOffAStaleEstimate, appointmentsAreOwned, tripIsNeverLate,
-    alarmIsNotLate, coastPromiseIsAnchored, gapsAreRespected
+    alarmIsNotLate, coastPromiseIsAnchored, gapsAreRespected,
+    tripIsAttained, finishedHoldNoAppointment, blindFractionRespected,
+    resumeKeepsTheCook
   }
 
   //--------------------------------------------------------------------------
@@ -775,21 +862,29 @@ module reverse_sear {
     BUG_ALARM_FOLLOWS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
-    BUG_PULL_WHEN_AWAITING_PROBE = false
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
   ).*
 }
-
 //----------------------------------------------------------------------------
 // One module per defect, each turning on exactly one, so every invariant above
 // is shown to bite rather than to hold vacuously.  spec/check.sh runs them.
 //----------------------------------------------------------------------------
+
 module bug_refit_reschedules {
   import app(
     BUG_REFIT_RESCHEDULES = true,
     BUG_ALARM_FOLLOWS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
-    BUG_PULL_WHEN_AWAITING_PROBE = false
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
   ).*
 }
 
@@ -799,7 +894,11 @@ module bug_alarm_follows_selection {
     BUG_ALARM_FOLLOWS_SELECTION = true,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
-    BUG_PULL_WHEN_AWAITING_PROBE = false
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
   ).*
 }
 
@@ -809,7 +908,11 @@ module bug_start_restarts_running {
     BUG_ALARM_FOLLOWS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = true,
     BUG_RESCHEDULE_EVERY_STEAK = false,
-    BUG_PULL_WHEN_AWAITING_PROBE = false
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
   ).*
 }
 
@@ -819,7 +922,11 @@ module bug_reschedule_every_steak {
     BUG_ALARM_FOLLOWS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = true,
-    BUG_PULL_WHEN_AWAITING_PROBE = false
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
   ).*
 }
 
@@ -829,6 +936,66 @@ module bug_pull_when_awaiting_probe {
     BUG_ALARM_FOLLOWS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
-    BUG_PULL_WHEN_AWAITING_PROBE = true
+    BUG_PULL_WHEN_AWAITING_PROBE = true,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
+  ).*
+}
+
+module bug_trip_opens_early {
+  import app(
+    BUG_REFIT_RESCHEDULES = false,
+    BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_START_RESTARTS_RUNNING = false,
+    BUG_RESCHEDULE_EVERY_STEAK = false,
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = true,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
+  ).*
+}
+
+module bug_keep_appointment_after_pull {
+  import app(
+    BUG_REFIT_RESCHEDULES = false,
+    BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_START_RESTARTS_RUNNING = false,
+    BUG_RESCHEDULE_EVERY_STEAK = false,
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = true,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
+  ).*
+}
+
+module bug_ignore_blind_cap {
+  import app(
+    BUG_REFIT_RESCHEDULES = false,
+    BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_START_RESTARTS_RUNNING = false,
+    BUG_RESCHEDULE_EVERY_STEAK = false,
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = true,
+    BUG_RESUME_RESTARTS = false
+  ).*
+}
+
+module bug_resume_restarts {
+  import app(
+    BUG_REFIT_RESCHEDULES = false,
+    BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_START_RESTARTS_RUNNING = false,
+    BUG_RESCHEDULE_EVERY_STEAK = false,
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = true
   ).*
 }
