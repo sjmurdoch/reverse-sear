@@ -1,7 +1,8 @@
 <!--
 Ready to submit at https://github.com/apalache-mc/apalache/issues/new?template=bug_report.md
 Everything below the title line is the issue body. It follows the template
-Apalache itself generates in BugReport.md, which is in this directory.
+Apalache itself generates in BugReport-0.62.2.md, which is in this directory
+alongside the 0.56.1 one.
 
 Nothing here has been submitted. Found while model-checking spec/steak.qnt;
 see spec/README.md for how it surfaced and what it cost.
@@ -107,9 +108,12 @@ general branch does, or to fall through to it when `name` is a cell name.
 
 ## What does and does not trigger it
 
-All of these were run against 0.56.1. The trigger needs three things at once: a
-lambda parameter of a **fold** on the left, `\in` (or `contains`), and a
+The table below was run against 0.56.1. The trigger needs three things at once:
+a lambda parameter of a **fold** on the left, `\in` (or `contains`), and a
 **singleton set literal** on the right.
+
+On 0.62.2 the first row, the two-element row and the `LET` row were re-run and
+behaved identically — crash, ok, ok. The other six were not re-run.
 
 | variation | result |
 |---|---|
@@ -158,7 +162,12 @@ by one binding, and both typecheck and both simulate — is in
 
 ## System information
 
-- Apalache version: `0.56.1`, build `70cdaf4` (as fetched by Quint 0.32.0)
+- Apalache versions: `0.62.2`, build `f0dec98` (current release at the time of
+  writing) and `0.56.1`, build `70cdaf4` (as fetched by Quint 0.32.0). The crash
+  is identical on both — same exception, same `$C$8`, and the same
+  `SetInRule.scala:40` / `Binding.scala:11` frames. Only the `FoldSetRule` frame
+  moves, 99 to 111, which looks like unrelated edits to that file rather than a
+  fix.
 - OS: Linux (x86-64, container)
 - JDK: OpenJDK 21.0.10
 - Reached both through `quint verify` and by running `apalache-mc` directly on
@@ -169,8 +178,10 @@ by one binding, and both typecheck and both simulate — is in
 The `BugReport.md` that Apalache generates is not quite valid Markdown:
 
 - Dollar signs in the log are backslash-escaped, so the trace reads `\$C\$8` and
-  class names read `a.f.a.t.Tool\$`. Thirty occurrences in a 187-line report.
+  class names read `a.f.a.t.Tool\$`. Thirty occurrences in the 187-line 0.56.1
+  report, and still there in the 200-line 0.62.2 one.
 - The "Input specification" block opens with ``` and closes with ````, so
   everything after it renders inside the code block.
 
-Both are visible in the attached `BugReport.md`, which is committed verbatim.
+Both are visible in the attached reports, `BugReport-0.62.2.md` and
+`BugReport-0.56.1.md`, which are committed verbatim.

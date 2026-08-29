@@ -8,9 +8,14 @@
 //     -> [ok] No violation found
 //
 // Both modules typecheck, and both run fine under `quint run` and `quint test`
-// -- it is only the symbolic backend that falls over.  Apalache 0.56.1, the
-// version Quint 0.32 fetches; it prints "Please report an issue" and writes a
-// BugReport.md, so it is a genuine internal error rather than a rejection.
+// -- it is only the symbolic backend that falls over.  It prints "Please report
+// an issue" and writes a BugReport.md, so it is a genuine internal error rather
+// than a rejection.
+//
+// Still present in Apalache 0.62.2 (build f0dec98), checked 2026-08-29: same
+// exception, same cell name, same SetInRule.scala:40 frame as 0.56.1, which is
+// the version Quint 0.32 fetches.  So the workaround below is still load-bearing
+// and upgrading Apalache does not remove the need for it.
 //
 // The trigger is narrow: a *singleton* set constructor under `contains` (or
 // `in`), inside the lambda of a `fold`.  FoldSetRule inlines the lambda by
