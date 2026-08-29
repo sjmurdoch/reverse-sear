@@ -421,6 +421,65 @@ test.describe('the oven as a whole, not the steak on screen', () => {
     expect((await app.rows2()).map(x => x.pill)).toEqual(['probe', 'probe', 'probe']);
   });
 
+  // The alarm belongs to the oven, and the model checker found the case the
+  // first fix did not cover: not two steaks in, but one in and one merely on
+  // the list. `alarmIsArmedWhileCooking` and `alarmRingsAtTheTrip` in
+  // spec/steak.qnt are these two tests.
+  test('a steak selected but never started does not silence the oven', async ({ app }) => {
+    // Tapping the glance row of a steak that is not in the oven points the
+    // readouts at a steak with no cook. render() then returned at "Set up your
+    // steak" -- before the alarm was checked at all -- and alarmAt() read that
+    // steak's null dueAt. The phone stayed silent through a real check.
+    await app.seedMany([DINNER[0]]);
+    await spyBeep(app);
+    await app.page.click('#addBtn');
+    await app.settle();
+    await app.page.click('#steakList .srow:nth-child(2)');
+    await app.settle();
+
+    const s = await app.state();
+    expect(s.current, 'the state under test: a steak with no cook is selected')
+      .toBe(s.steaks[1].id);
+    expect((await app.read()).label).toBe('Set up your steak');
+
+    const dueIn = await app.page.evaluate(() => (state.steaks[0].dueAt - Date.now()) / 60000);
+    expect(dueIn, 'and the one in the oven has a real appointment ahead of it').toBeGreaterThan(1);
+
+    await app.drift(dueIn + 5);
+    expect(await app.page.evaluate(() => alarmAt()),
+      'the alarm is the oven\'s, not the selection\'s').not.toBeNull();
+    expect(await beeps(app), 'it must ring even with the readouts elsewhere').toBeGreaterThan(0);
+  });
+
+  test('a steak taken out does not silence the ones still in', async ({ app }) => {
+    // The same defect through the other door: the finished card returns early
+    // too, and the selection lands on a steak whose appointment is over.
+    await app.seedMany(DINNER.slice(0, 2));
+    await spyBeep(app);
+    await app.page.evaluate(() => {
+      const st = state.steaks[1];
+      st.finishedAt = Date.now(); st.finalTemp = 44; st.dueAt = null;
+      state.current = st.id;
+      recompute(); save(); render();
+    });
+    await app.settle();
+    expect((await app.read()).label).toMatch(/Out of the oven/);
+
+    const dueIn = await app.page.evaluate(() => (state.steaks[0].dueAt - Date.now()) / 60000);
+    await app.drift(dueIn + 5);
+    expect(await beeps(app), 'the Ribeye is still in there and still overdue').toBeGreaterThan(0);
+  });
+
+  test('a cook left open overnight does not ring', async ({ app }) => {
+    // The one state that is exempt. Checking the alarm before render()'s early
+    // returns must not start beeping at a cook the app has already given up on.
+    await app.seedMany(DINNER.slice(0, 1));
+    await spyBeep(app);
+    await app.drift(24 * 60);
+    expect((await app.read()).label).toBe('Earlier cook still open');
+    expect(await beeps(app), 'nothing in that oven is being cooked now').toBe(0);
+  });
+
   test('starting another cook clears the whole oven', async ({ app }) => {
     // It cleared the selected steak only. The other two stayed marked "out" for
     // ever, and a steak that has started shows no starting-temperature box, so

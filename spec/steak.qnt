@@ -31,8 +31,9 @@
 //     runs on the 60 s timer and after every information event, never on the
 //     1 s render tick.  So `driftTick` below leaves a stale plan in place,
 //     exactly as the app does between timers.
-//   * `render()` returns early when the *selected* steak has not started, and
-//     the alarm is checked after that return.
+//   * `render()` returns early when the *selected* steak has not started.  The
+//     alarm is checked before that return -- it belongs to the oven, not to the
+//     selection -- and BUG_ALARM_NEEDS_SELECTION puts it back after it.
 //
 // Times are whole minutes; the sub-degree epsilons in `advise()` (0.15, 0.25)
 // are dropped with them.  Input validation (`readingProblem`) is out of scope:
@@ -76,6 +77,15 @@ module app {
   // The alarm rings at the selected steak's own appointment rather than at the
   // trip, leaving the phone silent while the card says "Open the oven now".
   const BUG_ALARM_FOLLOWS_SELECTION: bool
+
+  // The alarm is read off the selection rather than off the oven: it is only
+  // evaluated when the *selected* steak has a cook in progress, and falls back
+  // to that steak's own appointment.  Selecting a steak that is merely on the
+  // list then silences a real check -- render() returns at "Set up your steak"
+  // before the alarm is looked at, and there is no appointment there to ring
+  // from.  This is what the app did until the alarm moved to the top of
+  // render() and stopped reading `current`.
+  const BUG_ALARM_NEEDS_SELECTION: bool
 
   // Start puts in every steak rather than only the pending ones, re-zeroing the
   // clock of a steak already in the oven and throwing away its readings.
@@ -317,18 +327,28 @@ module app {
     if (BUG_TRIP_OPENS_EARLY and planned.size() > 0) earliest - MIN_GAP_MIN else earliest
   }
 
-  // alarmAt().  With several steaks in, the card counts down to the trip, so
-  // the alarm must ring at the same moment the card is counting down to.
-  val alarmAt: int =
-    if (BUG_ALARM_FOLLOWS_SELECTION) steaks.get(current).dueAt
-    else if (running.size() > 1 and planned.size() > 0) openAt
-    else steaks.get(current).dueAt
+  // alarmAt().  The card counts down to the trip, so the alarm rings at the
+  // trip -- which belongs to the oven, and never to whichever steak the
+  // readouts happen to be pointed at.  With no fits yet it falls back to the
+  // earliest appointment among the steaks actually in the oven; an empty oven
+  // does not ring.
+  val alarmAt: int = {
+    val held = running.filter(i => steaks.get(i).dueAt != NONE)
+    if (BUG_ALARM_FOLLOWS_SELECTION or BUG_ALARM_NEEDS_SELECTION)
+      steaks.get(current).dueAt
+    else if (planned.size() > 0) openAt
+    else if (held.size() > 0) held.fold(INF, (acc, i) => imin(acc, steaks.get(i).dueAt))
+    else NONE
+  }
 
-  // render() reaches the alarm only if it has not already returned at
-  // "Set up your steak" or the finished card -- both of which are decided by
-  // the *selected* steak.
+  // checkAlarm() is called from the top of render(), before every one of its
+  // early returns -- those are decided by the *selected* steak, and the alarm
+  // is not about the selection.  It was called after them, and a steak merely
+  // added to the list then sent render() out at "Set up your steak" with a
+  // real check overdue.
   val alarmChecked: bool =
-    steaks.get(current).startedAt != NONE and steaks.get(current).finishedAt == NONE
+    not(BUG_ALARM_NEEDS_SELECTION)
+      or (steaks.get(current).startedAt != NONE and steaks.get(current).finishedAt == NONE)
 
   // The card's primary "Out of the oven": the recommendation, which a steak
   // that has been sitting on a board may not bear.  (The always-available
@@ -365,13 +385,17 @@ module app {
       val s = m.get(i)
       imin(acc, if (s.dueAt != NONE) s.dueAt else s.startedAt + s.cNext)
     })
+    val held2 = run2.filter(i => m.get(i).dueAt != NONE)
     val at =
-      if (BUG_ALARM_FOLLOWS_SELECTION) m.get(current).dueAt
-      else if (run2.size() > 1 and plan2.size() > 0) open2
-      else m.get(current).dueAt
+      if (BUG_ALARM_FOLLOWS_SELECTION or BUG_ALARM_NEEDS_SELECTION) m.get(current).dueAt
+      else if (plan2.size() > 0) open2
+      else if (held2.size() > 0) held2.fold(INF, (acc, i) => imin(acc, m.get(i).dueAt))
+      else NONE
     and {
-      m.get(current).startedAt != NONE,
-      m.get(current).finishedAt == NONE,
+      not(BUG_ALARM_NEEDS_SELECTION) or and {
+        m.get(current).startedAt != NONE,
+        m.get(current).finishedAt == NONE
+      },
       at != NONE,
       now >= at
     }
@@ -783,32 +807,28 @@ module app {
   // in.  A fresh zero here would silently discard the whole cook.
   val resumeKeepsTheCook = not(seen.brokeResume)
 
+  // "The alarm rings at alarmAt(), never at state.dueAt directly."
+  //
+  // The phone may not be silent while the card says the door should be open.
+  // The weaker half, and the one that used to fail deterministically: while any
+  // steak is cooking, the alarm must at least be *evaluated*.  It was checked
+  // after render()'s early returns, so selecting a steak that had not started
+  // sent render() out at "Set up your steak" before the alarm was looked at.
+  val alarmIsArmedWhileCooking = (planned.size() > 0) implies alarmChecked
+
+  // The consequence, and the property a cook who puts the phone down is relying
+  // on: the trip comes due, the alarm goes off.
+  val alarmRingsAtTheTrip =
+    (planned.size() > 0 and clock >= openAt) implies alarmFired
+
   // The suite that must hold.
   val allInvariants = and {
     alwaysASteak, atMostMaxSteaks, scheduleIsSticky, startSparesRunningSteaks,
     noPullOffAStaleEstimate, appointmentsAreOwned, tripIsNeverLate,
     alarmIsNotLate, coastPromiseIsAnchored, gapsAreRespected,
     tripIsAttained, finishedHoldNoAppointment, blindFractionRespected,
-    resumeKeepsTheCook
+    resumeKeepsTheCook, alarmIsArmedWhileCooking, alarmRingsAtTheTrip
   }
-
-  //--------------------------------------------------------------------------
-  // "The alarm rings at alarmAt(), never at state.dueAt directly."
-  //
-  // The phone may not be silent while the card says the door should be open.
-  // This one does NOT hold of the app as it stands -- see spec/README.md and
-  // the `silentAlarm` run below.  It is kept out of `allInvariants` so the
-  // suite reports the defects it is meant to guard, and no more.
-  //--------------------------------------------------------------------------
-  // The weaker half, and the one that fails deterministically: while any steak
-  // is cooking, the alarm must at least be *evaluated*.  Selecting a steak that
-  // has not started sends render() out at "Set up your steak", which is before
-  // the alarm is looked at.
-  val alarmIsArmedWhileCooking = (planned.size() > 0) implies alarmChecked
-
-  // The consequence: the trip comes due and the phone stays silent.
-  val alarmRingsAtTheTrip =
-    (planned.size() > 0 and clock >= openAt) implies alarmFired
 
   //--------------------------------------------------------------------------
   // Scenarios.  These read as the browser tests do.
@@ -837,20 +857,22 @@ module app {
       .expect(startSparesRunningSteaks and tripIsNeverLate
               and steaks.get(1).reads == 2)
 
-  // The silent alarm: one steak cooking, a second added but not yet started.
-  // Tapping the second one's row -- which `renderSteakList` draws for every
-  // steak, and the handler accepts because it is not finished -- points
-  // `state.current` at a steak with no cook, so `render()` returns at
-  // "Set up your steak" and never reaches the alarm.  The trip comes due and
-  // the phone stays silent.
+  // The silent alarm, which this spec found and the app has since been fixed
+  // for: one steak cooking, a second added but not yet started.  Tapping the
+  // second one's row -- which `renderSteakList` draws for every steak, and the
+  // handler accepts because it is not finished -- points `state.current` at a
+  // steak with no cook.  `render()` returns at "Set up your steak", and the
+  // alarm used to be checked after that return, so the trip came due and the
+  // phone stayed silent.  It is now checked before it, off the oven rather than
+  // off the selection.
   run silentAlarmTest =
     init
       .then(startCook)
       .then(logReading(1))
       .then(addSteak)
       .then(selectSteak(2))
-      .expect(planned.size() > 0 and not(alarmChecked)
-              and not(alarmIsArmedWhileCooking))
+      .expect(planned.size() > 0 and alarmChecked
+              and alarmIsArmedWhileCooking and alarmAt != NONE)
 }
 
 //----------------------------------------------------------------------------
@@ -860,6 +882,7 @@ module reverse_sear {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -878,6 +901,7 @@ module bug_refit_reschedules {
   import app(
     BUG_REFIT_RESCHEDULES = true,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -892,6 +916,22 @@ module bug_alarm_follows_selection {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = true,
+    BUG_ALARM_NEEDS_SELECTION = false,
+    BUG_START_RESTARTS_RUNNING = false,
+    BUG_RESCHEDULE_EVERY_STEAK = false,
+    BUG_PULL_WHEN_AWAITING_PROBE = false,
+    BUG_TRIP_OPENS_EARLY = false,
+    BUG_KEEP_APPOINTMENT_AFTER_PULL = false,
+    BUG_IGNORE_BLIND_CAP = false,
+    BUG_RESUME_RESTARTS = false
+  ).*
+}
+
+module bug_alarm_needs_selection {
+  import app(
+    BUG_REFIT_RESCHEDULES = false,
+    BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = true,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -906,6 +946,7 @@ module bug_start_restarts_running {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = true,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -920,6 +961,7 @@ module bug_reschedule_every_steak {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = true,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -934,6 +976,7 @@ module bug_pull_when_awaiting_probe {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = true,
@@ -948,6 +991,7 @@ module bug_trip_opens_early {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -962,6 +1006,7 @@ module bug_keep_appointment_after_pull {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -976,6 +1021,7 @@ module bug_ignore_blind_cap {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,
@@ -990,6 +1036,7 @@ module bug_resume_restarts {
   import app(
     BUG_REFIT_RESCHEDULES = false,
     BUG_ALARM_FOLLOWS_SELECTION = false,
+    BUG_ALARM_NEEDS_SELECTION = false,
     BUG_START_RESTARTS_RUNNING = false,
     BUG_RESCHEDULE_EVERY_STEAK = false,
     BUG_PULL_WHEN_AWAITING_PROBE = false,

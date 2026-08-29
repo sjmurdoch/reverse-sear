@@ -1036,18 +1036,25 @@ function dueMin() {
 
 /**
  * The moment the card is counting down to, which is what the alarm must ring
- * at.  With several steaks in, that is the trip -- the earliest appointment any
- * of them holds -- and not the appointment of whichever steak the readouts
- * happen to be showing.  Ringing on the selected steak left the phone silent
- * while the card said "Open the oven now", which is the one promise this tool
- * makes to a cook who puts the phone down.
+ * at.  That is the trip -- the earliest appointment any steak in the oven holds
+ * -- and never the appointment of whichever steak the readouts happen to be
+ * showing.  The one promise this tool makes to a cook who puts the phone down
+ * is that it will shout before the steak goes past, and the selection is a
+ * readout, not a fact about the oven.
+ *
+ * It has been read off the selection twice, and gone silent both times.  Once
+ * with two steaks in and the readouts pointed at the later one.  Once with one
+ * steak cooking and a second merely added to the list: tapping that steak's
+ * glance row selects a steak with no cook, and `state.dueAt` is then null while
+ * a real check is overdue.  So this reads only the oven: no fits yet, fall back
+ * to the earliest appointment among the steaks actually in it; an empty oven
+ * does not ring.
  */
 function alarmAt() {
-  if (activeSteaks().length > 1) {
-    const o = nextOpening();
-    if (o) return o.openAt;
-  }
-  return state.dueAt;
+  const o = nextOpening();
+  if (o) return o.openAt;
+  const due = activeSteaks().map(s => s.dueAt).filter(t => t != null);
+  return due.length ? Math.min(...due) : null;
 }
 
 /**
@@ -1118,6 +1125,22 @@ let alarmFired = false;
 // Suppress the alarm on the very first render after a reload: a restored cook
 // that is already overdue should show its state, not shout at you.
 let armed = false;
+
+/**
+ * Ring if the trip is due.  Called from the top of render(), before every one
+ * of its early returns, because the alarm belongs to the oven and those returns
+ * are about the *selected* steak: with one steak cooking and a second selected
+ * but not started, render() returned at "Set up your steak" and the phone stayed
+ * silent through the check.  Only a stale cook is exempt -- nothing in that oven
+ * is being cooked now.
+ */
+function checkAlarm() {
+  const ringAt = isStale() ? null : alarmAt();
+  const ringing = ringAt != null && Date.now() >= ringAt;
+  if (ringing && !alarmFired && armed) { alarmFired = true; beep(); }
+  armed = true;
+  if (!ringing) alarmFired = false;
+}
 function render() {
   // With more than one in the oven the readouts below are about one of them, so
   // say which; unlabelled numbers next to three steaks are worse than no numbers.
@@ -1174,6 +1197,7 @@ function render() {
   renderSteakList();
   renderExtraSteaks();
   renderPassLabel();
+  checkAlarm();
   $("addBtn").disabled = state.steaks.length >= MAX_STEAKS;
   $("addBtn").textContent = state.steaks.length >= MAX_STEAKS
     ? `Three is the most it tracks` : "Add another steak";
@@ -1424,14 +1448,6 @@ function render() {
   wakeEl.textContent = wakeLock
     ? "Screen kept awake — leave this page open and it will beep"
     : "Only beeps while this page is open — set a phone timer for " + fmtWall(promised);
-
-  // Not `due`: that is this steak's own appointment, and with several in the
-  // oven the card is counting down to the trip instead.  See alarmAt().
-  const ringAt = alarmAt();
-  const ringing = ringAt != null && Date.now() >= ringAt;
-  if (ringing && !alarmFired && armed) { alarmFired = true; beep(); }
-  armed = true;
-  if (!ringing) alarmFired = false;
 
   $("statNow").innerHTML = nMid.toFixed(1) + '<span class="unit"> °C</span>';
   $("statNowSpread").textContent = nLo.toFixed(1) + "–" + nHi.toFixed(1);

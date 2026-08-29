@@ -26,12 +26,11 @@ BITE_STEPS="${BITE_STEPS:-20}"
 BITE_SAMPLES="${BITE_SAMPLES:-20000}"
 
 # The invariants that must hold, and the module that must break each one.
-# alarmIsArmedWhileCooking / alarmRingsAtTheTrip are deliberately absent: they
-# do not hold of the app as it stands.  See spec/README.md.
 HOLD="alwaysASteak atMostMaxSteaks scheduleIsSticky startSparesRunningSteaks \
       noPullOffAStaleEstimate appointmentsAreOwned tripIsNeverLate alarmIsNotLate \
       coastPromiseIsAnchored gapsAreRespected tripIsAttained \
-      finishedHoldNoAppointment blindFractionRespected resumeKeepsTheCook"
+      finishedHoldNoAppointment blindFractionRespected resumeKeepsTheCook \
+      alarmIsArmedWhileCooking alarmRingsAtTheTrip"
 
 BITE="scheduleIsSticky:bug_refit_reschedules \
       startSparesRunningSteaks:bug_start_restarts_running \
@@ -41,7 +40,9 @@ BITE="scheduleIsSticky:bug_refit_reschedules \
       tripIsAttained:bug_trip_opens_early \
       finishedHoldNoAppointment:bug_keep_appointment_after_pull \
       blindFractionRespected:bug_ignore_blind_cap \
-      resumeKeepsTheCook:bug_resume_restarts"
+      resumeKeepsTheCook:bug_resume_restarts \
+      alarmIsArmedWhileCooking:bug_alarm_needs_selection \
+      alarmRingsAtTheTrip:bug_alarm_needs_selection"
 
 check() { # module invariant steps samples -> 0 if the invariant held
   if [ "$MODE" = "verify" ]; then

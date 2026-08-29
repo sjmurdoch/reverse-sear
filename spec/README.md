@@ -60,7 +60,8 @@ them:
   and after every information event, never on the 1 s render tick. `driftTick`
   therefore leaves a stale plan in place, as the app does between timers.
 - **`render()` returns early** when the *selected* steak has not started, and
-  the alarm is checked after that return.
+  the alarm is checked *before* that return — which is the fix for the silent
+  alarm below, and `bug_alarm_needs_selection` puts it back after it.
 
 Times are whole minutes, and the sub-degree epsilons in `advise()` (0.15, 0.25)
 are dropped with them. Input validation (`readingProblem`) is out of scope: a
@@ -91,6 +92,8 @@ deliberately broken module per invariant, so none of them holds vacuously.
 | `finishedHoldNoAppointment` | a steak on the board stops dragging the trip earlier |
 | `blindFractionRespected` | `MAX_BLIND_FRACTION`: never blind for more than 55% of the way to the finish |
 | `resumeKeepsTheCook` | `resumeCook()` gives back the same steak — same zero, readings, posterior |
+| `alarmIsArmedWhileCooking` | the alarm is evaluated whenever anything is in the oven, whatever is selected |
+| `alarmRingsAtTheTrip` | and it goes off when the trip comes due |
 
 `tripIsNeverLate` and `tripIsAttained` are worth reading together: the first
 says the trip is no later than any steak's appointment, the second that it is
@@ -113,12 +116,13 @@ which have not actually happened. Running `check.sh` shows each being caught:
 | `bug_keep_appointment_after_pull` | `finishedHoldNoAppointment` |
 | `bug_ignore_blind_cap` | `blindFractionRespected` |
 | `bug_resume_restarts` | `resumeKeepsTheCook` |
+| `bug_alarm_needs_selection` | `alarmIsArmedWhileCooking`, `alarmRingsAtTheTrip` — the silent alarm |
 
-## One invariant that does not hold: the silent alarm
+## The silent alarm: found here, fixed in the app
 
-`alarmIsArmedWhileCooking` and `alarmRingsAtTheTrip` are **deliberately kept out
-of `check.sh`**, because the app as it stands does not satisfy them. The spec
-found this; `run silentAlarmTest` is the reproduction.
+`alarmIsArmedWhileCooking` and `alarmRingsAtTheTrip` were red when they were
+first written, and they were red about the app rather than about the spec. This
+is the one defect the model checker found that the browser tests had not.
 
 With one steak cooking, add a second and do not start it. `renderSteakList()`
 draws a row for *every* steak, including the one that reads "not in the oven
@@ -131,9 +135,9 @@ state.current = st.id;
 ```
 
 Tapping that row points `state.current` at a steak with no cook, and two things
-follow. `render()` takes the not-started branch and returns at "Set up your
-steak" — before the alarm is checked at all. And `alarmAt()` falls through to
-`state.dueAt`, which is that steak's, which is `null`, because
+followed. `render()` took the not-started branch and returned at "Set up your
+steak" — before the alarm was checked at all. And `alarmAt()` fell through to
+`state.dueAt`, which was that steak's, which was `null`, because
 `activeSteaks().length > 1` is false with only one steak actually in the oven.
 
 Confirmed against the page (Playwright, `iphone-chromium` project — WebKit could
@@ -146,10 +150,19 @@ not be downloaded in that sandbox; the logic here is not browser-specific):
 | drift 5 min past steak 1's check | steak 2 | `null` | "Set up your steak" | **0** |
 | tap back to steak 1 | steak 1 | — | "Check it now" | 1 |
 
-This is the same class of defect as the one `alarmAt()` was written to fix — the
-phone silent while a check is overdue — for the case that fix does not cover:
-not two steaks in the oven, but one in and one merely on the list. It is left
-unfixed here because this spec was asked for, not a change to the app.
+It was the same class of defect as the one `alarmAt()` was written to fix — the
+phone silent while a check is overdue — for the case that fix did not cover: not
+two steaks in the oven, but one in and one merely on the list.
+
+`web/app.html` now takes the alarm off the selection entirely. `alarmAt()` reads
+only the oven — the trip if anything is fitted, otherwise the earliest
+appointment among the steaks actually in there, and `null` for an empty oven —
+and `checkAlarm()` is called from the top of `render()`, before every one of its
+early returns. A stale cook is the one exemption: nothing in that oven is being
+cooked now. Three tests in `tests/multisteak.spec.js` hold it (the steak on the
+list, the steak on the board, and the overnight cook that must stay quiet), and
+`bug_alarm_needs_selection` restores the old behaviour so the two invariants are
+shown to bite.
 
 ## Apalache, and the one thing the spec is written around
 

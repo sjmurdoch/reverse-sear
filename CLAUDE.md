@@ -65,10 +65,17 @@ removing or pulling a steak re-plans nothing — the others learned nothing from
 it, and an appointment re-made now is floored at `now + MIN_GAP_MIN`, which is
 walkthrough 1's walk-forward defect.
 
-**The alarm rings at `alarmAt()`, never at `state.dueAt` directly.** With
-several steaks in, the card counts down to the *trip*; `state.dueAt` is the
-selected steak's own appointment, and ringing from it left the phone silent for
-minutes while the card said "Open the oven now".
+**The alarm belongs to the oven, and nothing about it may read the selection.**
+It rings at `alarmAt()` — the trip, the earliest appointment any steak in the
+oven holds — never at `state.dueAt`, which is whichever steak the readouts are
+pointed at. `checkAlarm()` is therefore called from the *top* of `render()`,
+before its early returns, which are decided by that same selection. Reading the
+selection silenced the phone twice: once with several steaks in and the readouts
+on the later one, and once with a steak merely added to the list, where
+`render()` returned at "Set up your steak" and `state.dueAt` was `null` while a
+real check went past. Both are in `tests/multisteak.spec.js`, and
+`alarmIsArmedWhileCooking` / `alarmRingsAtTheTrip` in `spec/steak.qnt` are the
+same two rules — the second defect was found there first.
 
 **Nothing that belongs to the whole oven may go through the per-steak
 accessors.** They read and write whichever steak is *selected*, so anything
@@ -157,11 +164,9 @@ what the page does; this checks what the state machine cannot do. If you change
 the scheduling rule or the shared constants, change them in `spec/steak.qnt` too
 -- nothing but reading holds them together.
 
-One invariant there is knowingly red, and `spec/README.md` has the detail: with
-one steak cooking and a second added but not started, tapping the second one's
-glance row points `state.current` at a steak with no cook, `render()` returns at
-"Set up your steak" before the alarm is checked, and `alarmAt()` falls through to
-that steak's null `dueAt`. The overdue steak's check passes in silence.
+It has already earned its keep: the silent alarm above is a defect it found and
+the browser tests did not. It was red here first, confirmed against the page,
+then fixed in `web/app.html`; `spec/README.md` has the trace.
 
 ### Three layers
 
