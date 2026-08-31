@@ -143,4 +143,78 @@ test.describe('setting up a cook', () => {
     expect(s.readings).toEqual([{ t: 0, temp: 5 }]);
     expect(s.dueAt).not.toBeNull();
   });
+
+  // Whether the oven was up to temperature is recorded, not modelled -- and the
+  // "not modelled" half is deliberate and measured. A cold start lands almost
+  // entirely on the fitted dead time, and moving the *prior* for it makes the
+  // app more optimistic from the second reading on, which is backwards. So this
+  // control changes what the page says and nothing the model does.
+  const openSetup = app => app.page.evaluate(() => {
+    document.getElementById('setup').open = true; render();
+  });
+
+  test('the pre-heat answer is recorded, and changes no prediction', async ({ app }) => {
+    await app.setup({ ovenC: 120 });
+    await app.start(5);
+    await app.seed([[0, 5], [22, 14], [38, 25]]);
+    const before = await app.state();
+
+    await openSetup(app);
+    await app.page.click('#preheatToggle button[data-pre="0"]');
+    await app.settle();
+    const after = await app.state();
+
+    expect(after.preheated).toBe(false);
+    expect(after.dueAt, 'no appointment may move: nothing the schedule uses changed')
+      .toBe(before.dueAt);
+    expect(after.planNext).toBe(before.planNext);
+    expect(after.planPull).toBe(before.planPull);
+    expect(after.readings).toEqual(before.readings);
+    expect(await app.page.textContent('#setupDigest')).toMatch(/from cold/);
+
+    await app.page.click('#preheatToggle button[data-pre="1"]');
+    await app.settle();
+    expect((await app.state()).preheated).toBe(true);
+    expect(await app.page.textContent('#setupDigest')).not.toMatch(/from cold/);
+  });
+
+  test('the pre-heat answer survives closing the app', async ({ app }) => {
+    await app.page.click('#preheatToggle button[data-pre="0"]');
+    await app.start(5);
+    await app.page.reload();
+    await app.settle();
+    expect((await app.state()).preheated).toBe(false);
+    await expect(app.page.locator('#preheatToggle button[data-pre="0"]'))
+      .toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('a save from before this control existed reads as pre-heated', async ({ app }) => {
+    // It said nothing about the oven, so assume the usual case rather than
+    // inventing a cold start for a cook that never claimed one.
+    await app.page.evaluate(() => {
+      localStorage.setItem('reverse-sear-pilot-v1', JSON.stringify({
+        ovenC: 130, fan: true, current: null, steaks: [],
+      }));
+    });
+    await app.page.reload();
+    await app.settle();
+    const st = await app.state();
+    expect(st.ovenC, 'the rest of that save is still read').toBe(130);
+    expect(st.preheated).toBe(true);
+  });
+
+  test('before the first fit the card says what the prior assumed', async ({ app }) => {
+    await app.page.click('#preheatToggle button[data-pre="0"]');
+    await app.start(5);
+    const cold = await app.read();
+    expect(cold.why).toMatch(/the oven was still warming when this went in/i);
+    expect(cold.why).toMatch(/expect this to be optimistic/i);
+
+    await openSetup(app);
+    await app.page.click('#preheatToggle button[data-pre="1"]');
+    await app.settle();
+    const hot = await app.read();
+    expect(hot.why).toMatch(/the prior for a steak this size in an oven this hot/i);
+    expect(hot.why).not.toMatch(/still warming/i);
+  });
 });

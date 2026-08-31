@@ -1201,3 +1201,121 @@ nothing there to guard.
 
 Run under `iphone-chromium` here; WebKit — the browser that matters, and the one
 that catches an element rebuilt under a finger — ran in CI on the pushed commit.
+
+---
+
+## Walkthrough 8 — reading the report of a cook that went wrong
+
+**Persona.** Walkthrough 7's cook, a fortnight on: the report in their hand,
+asking the only question a record is for — *why was it so far out, and what do I
+do differently?*
+
+**Scenario.** A real cook, 31 Aug 2026. Two 1.00 kg, 50 mm steaks, in together
+from 5 °C, one to 57 °C and one to 44 °C, in a 120 °C conventional oven **that
+was not pre-heated**. 175 minutes and 112 minutes. Before any reading the app had
+said 62 minutes.
+
+**Task stages walked.** Reading the report → forming a theory from it → deciding
+what to change next time.
+
+**How it was walked.** Against the real readings, with `model/fit.py` re-run on
+every prefix of them, so what the app believed at each moment could be recovered
+rather than guessed at.
+
+**What held.** The readings, the fitted parameters and the residuals in the
+report are mutually consistent — re-running the fit reproduces the printed
+residuals to a tenth. The record itself is sound. What failed is what the report
+*said about* it.
+
+### 1. It named a cause the fit cannot identify
+
+**Stage:** forming a theory. **Question failed:** 4 — the cook acts on what it
+says, and it was wrong.
+
+> `· 10 min of dead time — that is the wet surface. Patting it dry before it goes
+> in removes most of it.`
+
+`lag` has three causes and the model has one parameter: the time heat takes to
+reach the centre of 50 mm, a wet surface, and — here — an oven that was still
+warming. Driving the fitted model from a ramping ambient reports a dead time of
+3.8 / 9.6 / 15.6 min for warm-ups of 0 / 10 / 25 min while `τ` and `T∞` barely
+move, so on this cook the oven was the likeliest bulk of that 10 minutes, and
+patting the steak dry would not have removed it.
+
+**Change.** The line names the three and picks none. A cold start is not a guess
+— it is something the cook can state — so Setup asks, the report records it, and
+the oven's share of the advice is given once in the OVEN block rather than
+repeated under every steak.
+
+### 2. It advised off numbers the cook never measured
+
+**Stage:** deciding what to change. **Question failed:** 4 again.
+
+Steak 2's block read `τ = 135 min`, `largest miss 0.2 °C`, and *"It ran 91%
+slower than the geometry prior for this size. Same cut and oven again, expect
+that again."* Its neighbour — same mass, same thickness, same oven, same start —
+fitted 94 min. Both cannot be right.
+
+Steak 2 was pulled 49% of the way to its own fitted asymptote, before the curve
+had bent. Until it bends, `T∞` and `τ` trade along a ridge: raise both together
+and the readings fit as well. Its 5–95% band for `T∞` was 65–101 °C against
+steak 1's 64–79 — the fit *knew*, and the report printed the median as if it were
+a measurement. The tiny residual was the tell, not the reassurance: three
+parameters against a gently curving line.
+
+**Change.** Every fitted number is shown with its 5–95% band. When `T∞`'s band is
+still wider than `T_INF_PINNED_C` — half the prior's own span, so the readings
+have not even halved what it started from — the report says so in the cook's own
+terms and withholds the parameter-derived advice. What was *measured* rather than
+fitted, "allow 112 min", still stands.
+
+### 3. A recommendation of mine that did not survive being tested
+
+Having established that a cold start lands on `lag`, the obvious change was a
+`lagMedian` of 6 pre-heated and ~15 from cold. Measured against the real cook, it
+is backwards:
+
+| readings so far | lag prior 6 | 12 | 18 |
+|---|---|---|---|
+| 1 | 70 | 80 | 90 |
+| 2 | 111 | 92 | 86 |
+| 3 | 157 | 152 | 150 |
+
+The truth was 173 minutes. A longer *assumed* dead time means the observed rise
+happened in less heating time, so the fit infers a faster steak and an earlier
+finish — the app becomes more optimistic exactly where a cold oven should make it
+less. Only with a single reading, where there is nothing to re-interpret, does it
+push the right way.
+
+**Not changed, therefore.** No prior moves, the flag forces no refit and no
+appointment changes. Representing a cold start honestly means a ramping ambient
+in the forward model, which is a change to the physics and belongs behind a
+closed-loop re-derivation in `validate.py`, not behind a toggle.
+
+### Deliberately not changed
+
+- **The evaporative stall is still not modelled**, and it remains the largest
+  source of error in this cook: the heating rate collapsed from 0.45 to
+  0.19 °C/min across a 2.6 °C step at ~42 °C, and for three consecutive readings
+  the 90% interval for the finish excluded the truth. Both halves of the fix —
+  a `T∞` prior that knows about evaporation, and a model-error term that is
+  correlated rather than per-reading — move every posterior, and with them
+  `COAST_UNDERSHOOT_C` and the parity fixture.
+- **The report still does not feed back into the prior.** Walkthrough 7's line
+  holds: it says what this cook fitted and how far the prior was out; pooling a
+  kitchen's history into the prior is the standing modelling proposal.
+- **Nothing was added to `advise()`.** Every change here is presentation, or a
+  fact the cook supplied that the model does not read.
+
+### Verification
+
+Nine regression tests — five in `report.spec.js`, four in `setup.spec.js`. The
+report ones cover the dead-time line naming none of its three causes, a cold
+start recorded and its advice given once, the bands printed beside every fitted
+number, the unpinned fit losing its advice while keeping what was measured, and
+the counterpart pinned fit keeping everything it earned. The setup ones cover the
+answer being recorded, changing no appointment and no plan, surviving a reload,
+defaulting to pre-heated for a save from before it existed, and the card no longer
+calling the prior "an oven this hot" when the oven was still warming.
+
+Run under `iphone-chromium` here; WebKit ran in CI on the pushed commit.

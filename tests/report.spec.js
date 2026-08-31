@@ -59,14 +59,13 @@ test.describe('the cook report', () => {
       'eight readings, each with a residual').toBe(8);
 
     // the three fitted parameters, against the prior they started from
-    expect(text).toMatch(/asymptote T∞\s+\d+\.\d °C\s+\d+\.\d °C/);
-    expect(text).toMatch(/time constant τ\s+\d+ min\s+\d+ min/);
-    expect(text).toMatch(/dead time\s+\d+ min\s+\d+ min/);
+    expect(text).toMatch(/asymptote T∞\s+\d+\.\d °C\s+\(.+?\)\s+\d+\.\d °C/);
+    expect(text).toMatch(/time constant τ\s+\d+ min\s+\(.+?\)\s+\d+ min/);
+    expect(text).toMatch(/dead time\s+\d+ min\s+\(.+?\)\s+\d+ min/);
 
     // and what it means for the next one
     expect(text).toMatch(/NEXT TIME/);
     expect(text).toMatch(/Same steak, same oven, from 5\.0 °C: allow \d+ min to 44\.0 °C\./);
-    expect(text).toMatch(/one degree of target is about \d+\.\d min/);
     expect(text).toMatch(/T = T∞ − \(T∞ − T₀\)·exp/);
   });
 
@@ -140,6 +139,100 @@ test.describe('the cook report', () => {
     expect(await app.page.evaluate(() => window.__copied),
       'a cancelled share must not silently copy instead').toBe(null);
     expect(await app.page.textContent('#reportNote')).toBe('');
+  });
+
+  // A real cook (2026-08-31: two 50 mm steaks, 120 C conventional, in from cold)
+  // showed the report asserting mechanisms it cannot identify. These hold the
+  // line between what the fit measured and what it merely fitted.
+  // The real cook's own numbers, which fit a dead time of about 10 min.
+  const REAL = [
+    { name: 'Steak 1', thickMm: 50, massKg: 1.0, targetC: 57,
+      readings: [[0, 5], [31, 17.5], [56, 28.3], [86, 41.7], [99, 44.3],
+                 [112, 46.9], [134, 51.0], [160, 55.2], [170, 56.6]] },
+  ];
+
+  test('it does not blame the dead time on one cause it cannot identify', async ({ app }) => {
+    await app.seedMany(REAL, { elapsed: 170 });
+    await app.page.evaluate(() => { state.ovenC = 120; recompute(); render(); });
+    await pullAll(app);
+    const text = await report(app);
+    expect(text, 'the state under test: a dead time long enough to explain')
+      .toMatch(/before the core moved at all/);
+    expect(text, 'it may not name the wet surface as the cause')
+      .not.toMatch(/that is the wet surface/);
+    expect(text).toMatch(/the fit cannot separate them/);
+    expect(text).toMatch(/the time heat takes to reach the centre of 50 mm/);
+  });
+
+  test('a cold start is recorded, and named as what the dead time may be', async ({ app }) => {
+    await app.seedMany(DINNER, { elapsed: 44 });
+    await app.page.evaluate(() => { state.preheated = false; save(); render(); });
+    await pullAll(app);
+    const text = await report(app);
+    expect(text).toMatch(/STILL WARMING when they went in/);
+    expect(text, "the oven's own advice belongs to the oven, said once")
+      .toMatch(/A cold start delays everything by roughly the oven's own warm-up time/);
+    expect((text.match(/A cold start delays everything/g) || []).length).toBe(1);
+
+    // and the other way round
+    await app.page.evaluate(() => { state.preheated = true; save(); render(); });
+    await app.settle();
+    const hot = await report(app);
+    expect(hot).toMatch(/up to temperature when they went in/);
+    expect(hot).not.toMatch(/A cold start delays everything/);
+  });
+
+  test('it withholds parameter advice from a fit that is not pinned down', async ({ app }) => {
+    // A steak pulled before its curve bends leaves T-inf and tau trading along
+    // a ridge. The residuals are tiny and the numbers are a guess; the report
+    // used to quote them and say "expect that again".
+    await app.seedMany([
+      { name: 'Early', thickMm: 50, massKg: 1.0, targetC: 44,
+        readings: [[0, 5], [31, 15.4], [57, 26.4], [86, 37.0], [100, 41.6]] },
+    ], { elapsed: 100 });
+    await pullAll(app);
+    const text = await report(app);
+
+    const band = await app.page.evaluate(() => {
+      const f = fits.get(state.steaks[0].id);
+      const q = pcts(f.samples.map(x => x[1]), [0.05, 0.95]);
+      return q[1] - q[0];
+    });
+    expect(band, 'the state under test: the asymptote is barely narrowed from the prior')
+      .toBeGreaterThan(25);
+
+    expect(text).toMatch(/NOT pinned down by this cook/);
+    expect(text).toMatch(/% of the way to its own fitted asymptote/);
+    expect(text, 'and it must not tell the cook to expect these numbers again')
+      .not.toMatch(/expect that again/);
+    expect(text, 'nor read the tail rate off an unpinned posterior')
+      .not.toMatch(/one degree of target is about/);
+    // What is measured rather than fitted still stands.
+    expect(text).toMatch(/allow \d+ min to 44\.0 °C/);
+  });
+
+  test('a pinned fit keeps everything it earned', async ({ app }) => {
+    // The counterpart: readings that go far enough up the curve to bend it.
+    await app.seedMany([
+      { name: 'Full', thickMm: 50, massKg: 1.0, targetC: 57,
+        readings: [[0, 5], [31, 17.5], [56, 28.3], [86, 41.7], [99, 44.3],
+                   [112, 46.9], [134, 51.0], [160, 55.2], [170, 56.6]] },
+    ], { elapsed: 170 });
+    await pullAll(app);
+    const text = await report(app);
+    expect(text).not.toMatch(/NOT pinned down/);
+    expect(text).toMatch(/one degree of target is about \d+\.\d min/);
+  });
+
+  test('the fitted numbers are shown with the band the fit actually has', async ({ app }) => {
+    await app.seedMany(DINNER, { elapsed: 44 });
+    await pullAll(app);
+    const text = await report(app);
+    expect(text).toMatch(/asymptote T∞\s+\d+\.\d °C\s+\(\d+\.\d–\d+\.\d\)/);
+    expect(text).toMatch(/time constant τ\s+\d+ min\s+\(\d+–\d+\)/);
+    expect(text).toMatch(/dead time\s+\d+ min\s+\(\d+–\d+\)/);
+    expect(text, 'a tiny residual on a three-parameter fit is not a quality signal')
+      .toMatch(/small is expected, not evidence/);
   });
 
   test('it survives closing the app, and goes when the next cook starts', async ({ app }) => {

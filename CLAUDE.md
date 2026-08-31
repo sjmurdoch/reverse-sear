@@ -112,6 +112,32 @@ horizon stretched to a finish that was never going to happen and the curve went
 on climbing across a chart of a dinner that was over. The next-action marker and
 the "now" line belong to a steak that is still in the oven.
 
+**The report may not claim a mechanism the fit cannot identify.** `lag` has
+three causes — the core's own conduction delay, a wet surface, and an oven still
+coming up — and one parameter. It said *"that is the wet surface. Patting it dry
+removes most of it"*, which on a cold-started cook was wrong. It now names the
+three and picks none. The same rule governs the fitted parameters themselves: a
+steak pulled before its curve bends leaves `T∞` and `τ` trading along a ridge, so
+the report shows the 5–95% band beside every fitted number and withholds the
+parameter-derived advice (the tail rate, the evaporation gap, "expect that again")
+when `T∞`'s band is wider than `T_INF_PINNED_C`. Small residuals are *not* the
+test — an unidentified three-parameter fit to a gently curving line has the
+smallest residuals of all, which is why the report says so on that line.
+
+**`state.preheated` is recorded and deliberately not modelled.** A cold oven is
+real — it delays a cook by roughly the oven's own warm-up time — and it lands
+almost entirely on the fitted `lag`: driving the model from a ramping ambient
+reports a dead time of 3.8 / 9.6 / 15.6 min for warm-ups of 0 / 10 / 25 min while
+`τ` and `T∞` barely move. **Moving `lagMedian` to match is the obvious fix and it
+is backwards.** A longer *assumed* dead time means the observed rise happened in
+less heating time, so the fit infers a faster steak and an earlier finish: on a
+real cold-started cook that needed 173 min, raising the prior from 6 to 18 min
+moved the estimate after two readings from 111 to 86. Doing this properly means a
+ramping ambient in the forward model, behind a `validate.py` re-derivation. Until
+then the flag changes no prior, forces no refit and moves no appointment — it
+stops the report mis-attributing the dead time, and stops the card calling the
+prior "an oven this hot" when it is not yet.
+
 **The cook report may not tick.** `renderReport()` runs inside `render()`, once a
 second, and the report is a block of text the cook may be part-way through
 selecting: every number in it is anchored to the cook, never to the clock, so the
@@ -172,6 +198,9 @@ dependency-free. **They must stay in step.** Paired names:
 | `fit` (numpy, vectorised chains) | `fitPosterior` (mulberry32 PRNG) |
 | `advise` | `advise` |
 | `Priors` defaults, `advise` kwargs | module-level `const`s near `advise` |
+
+`default_priors` takes no pre-heat argument, on purpose — its docstring carries
+the same measurement as the rule above.
 
 Shared constants that must match: `GUARD_C` 2.0, `MIN_GAP_MIN` 5,
 `MAX_GAP_MIN` 30, `MAX_BLIND_FRACTION` 0.55, `COAST_UNDERSHOOT_C` 0.6,

@@ -313,6 +313,28 @@ def advise(
 
 
 def default_priors(mass_kg: float, thickness_m: float, oven_c: float, fan: bool = False) -> Priors:
+    """The prior for one steak of this size in an oven at this setting.
+
+    Note what is *not* here: whether the oven was up to temperature when the
+    steak went in.  A cold start is real -- it delays the whole cook by roughly
+    the oven's own warm-up time constant -- and it lands almost entirely on the
+    fitted ``lag``: driving this model from an ambient ramping to setpoint makes
+    it report a dead time of 3.8 / 9.6 / 15.6 min for warm-ups of 0 / 10 / 25
+    min, while ``tau`` and ``t_inf`` barely move.
+
+    Moving ``lag_median`` to match is the obvious fix and it is the wrong one.
+    A longer *assumed* dead time means the observed rise happened in less
+    heating time, so the fit infers a faster steak and an earlier finish:
+    against a real cold-started cook that needed 173 min, raising this from 6
+    to 18 min moved the estimate after two readings from 111 to 86.  It makes
+    the schedule more optimistic exactly where a cold oven should make it less.
+
+    Doing this properly means a ramping ambient in the forward model -- a change
+    to the physics, to be made behind a closed-loop re-derivation in
+    validate.py, not by nudging a prior.  Until then the app records whether the
+    oven was pre-heated and says so in the cook report, and the model does not
+    pretend to know.
+    """
     h = 26.0 if fan else 20.0
     width, length = geometry_from_mass(mass_kg, thickness_m)
     tau = tau_prior_minutes(thickness_m, width, length, h=h)

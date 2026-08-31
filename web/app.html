@@ -415,6 +415,13 @@
             <button type="button" data-fan="1" aria-pressed="false">Fan</button>
           </div>
         </div>
+        <div class="field" style="grid-column:1/-1">
+          <label for="preheatToggle">At the moment it went in, the oven was</label>
+          <div class="toggle" id="preheatToggle">
+            <button type="button" data-pre="1" aria-pressed="true">Up to temperature</button>
+            <button type="button" data-pre="0" aria-pressed="false">Still warming</button>
+          </div>
+        </div>
       </div>
 
       <!-- Then one block per steak.  The first steak's block is these fields:
@@ -751,6 +758,20 @@ const DROP_QUERY_C = 3.0;   // a reading this far below the last one gets querie
  * breath is the card contradicting itself. */
 const SPREAD_WIDE_C = 6.0;
 
+/* How wide the asymptote's 5-95% band may be before the cook report stops
+ * treating the fitted parameters as a measurement of the steak.
+ *
+ * A steak pulled before its curve bends leaves T-inf and tau trading along a
+ * ridge: any pair with the same early slope fits the readings as well as any
+ * other, so the fit is a guess that happens to have small residuals.  The
+ * posterior's own width is the honest test, and this threshold is set against
+ * the prior it started from -- t_inf_sd is 15 C, so the prior's own 5-95% span
+ * is about 49 C, and 25 C means the readings have at least halved it.
+ *
+ * Like SPREAD_WIDE_C this is presentation only: advise(), the schedule and the
+ * parity fixture know nothing about it. */
+const T_INF_PINNED_C = 25.0;
+
 // How long the finished card goes on counting the rest.  Past this it is a
 // record of a dinner, not a timer: a card found the next morning saying
 // "resting 900 min" is the same stale-state defect the six-hour guard exists
@@ -829,7 +850,7 @@ const STEAK_DEFAULTS = {
   resumedAt: null, readings: []
 };
 
-let state = { ovenC: 125, fan: false, steaks: [], current: null };
+let state = { ovenC: 125, fan: false, preheated: true, steaks: [], current: null };
 let readingAge = 0;          // minutes: how long ago the reading in the box was taken
 let startAge = 0;            // minutes: how long ago the steaks actually went in
 let dockNote = "";           // a refused reading, held until an accepted one replaces it
@@ -888,6 +909,9 @@ function load() {
 
   state.ovenC = saved.ovenC != null ? saved.ovenC : 125;
   state.fan = !!saved.fan;
+  // A save from before this existed is a cook whose oven state nobody recorded.
+  // Assume the usual case rather than inventing a cold start for it.
+  state.preheated = saved.preheated !== false;
 
   if (Array.isArray(saved.steaks)) {
     state.steaks = saved.steaks.map((d, i) => Object.assign(newSteak(i + 1), d));
@@ -910,7 +934,8 @@ function load() {
 function save() {
   try {
     localStorage.setItem(STORE, JSON.stringify({
-      ovenC: state.ovenC, fan: state.fan, current: state.current, steaks: state.steaks
+      ovenC: state.ovenC, fan: state.fan, preheated: state.preheated,
+      current: state.current, steaks: state.steaks
     }));
   } catch (e) { /* no-op */ }
 }
@@ -1279,9 +1304,10 @@ function render() {
     : finished ? "done"
     : started ? fmtClock(nowMin()) + " elapsed" : "not started";
 
+  const cold = state.preheated ? "" : " from cold";
   $("setupDigest").textContent = several
-    ? `${state.ovenC}°C ${state.fan ? "fan" : ""} · ${state.steaks.length} steaks`
-    : `${state.ovenC}°C ${state.fan ? "fan" : ""} · target ${state.targetC}°C · ${state.thickMm}mm`;
+    ? `${state.ovenC}°C ${state.fan ? "fan" : ""}${cold} · ${state.steaks.length} steaks`
+    : `${state.ovenC}°C ${state.fan ? "fan" : ""}${cold} · target ${state.targetC}°C · ${state.thickMm}mm`;
 
   const priors = buildPriors(cfg());
   $("priorNote").innerHTML =
@@ -1499,7 +1525,11 @@ function render() {
     // prior for a steak this size. Saying so beats calling it a "mid-course
     // check" before there is a course.
     : state.readings.length < 2 && plan.action === "measure"
-      ? "Nothing is fitted yet — this is the prior for a steak this size in an oven this hot. The first check is the one that turns it into a prediction."
+      // "an oven this hot" is not true yet when the oven went in cold, and the
+      // prior has no way to know: it assumes the setpoint from the first second.
+      ? (state.preheated
+          ? "Nothing is fitted yet — this is the prior for a steak this size in an oven this hot. The first check is the one that turns it into a prediction."
+          : "Nothing is fitted yet, and the oven was still warming when this went in — the prior assumes the setpoint from the first second, so expect this to be optimistic. The first check is the one that turns it into a prediction.")
     // The whole argument of the tool is that the *opening* is what costs, not
     // the reading. A cook whose potatoes are in the same oven is going to open
     // that door anyway, and nothing said that a reading is free once they have.
@@ -1899,9 +1929,22 @@ function buildReport() {
            + ", " + (done.length > 1 ? "last out at " : "out at ") + fmtWallClock(last));
   out.push("");
   out.push("OVEN");
-  out.push("  " + state.ovenC + " °C, " + (state.fan ? "fan" : "conventional"));
+  out.push("  " + state.ovenC + " °C, " + (state.fan ? "fan" : "conventional")
+           + (state.preheated ? ", up to temperature when they went in"
+                              : ", STILL WARMING when they went in"));
   out.push("  " + done.length + (done.length === 1 ? " steak" : " steaks, in together")
            + " · door opened " + ovenOpenings() + (ovenOpenings() === 1 ? " time" : " times"));
+  if (!state.preheated) {
+    // Measured on the fitted model: driving it from an ambient ramping to
+    // setpoint reports a dead time of 3.8 / 9.6 / 15.6 min for warm-ups of
+    // 0 / 10 / 25 min, while tau and T-inf barely move.  So a cold start hides
+    // inside the dead time, and costs about its own warm-up time on the finish.
+    out.push("  A cold start delays everything by roughly the oven's own warm-up time —");
+    out.push("  ten to fifteen minutes for a domestic oven — and it hides inside the dead");
+    out.push("  time below, where the fit cannot tell it from a wet surface. Pre-heating");
+    out.push("  properly, and letting it soak rather than trusting the ready light, is");
+    out.push("  that time back.");
+  }
 
   for (const st of done) {
     const f = fits.get(st.id);
@@ -1935,21 +1978,47 @@ function buildReport() {
 
     if (th) {
       const tau = Math.exp(th[0]), tInf = th[1], lag = th[2];
+      // A point estimate of a posterior is a claim the fit did not make.  The
+      // 5-95% band is what it actually knows, and on a cook that stopped early
+      // it is the difference between a measurement and a guess.
+      const qTau = pcts(f.samples.map(x => Math.exp(x[0])), [0.05, 0.95]);
+      const qInf = pcts(f.samples.map(x => x[1]), [0.05, 0.95]);
+      const qLag = pcts(f.samples.map(x => x[2]), [0.05, 0.95]);
+      const band = (lo, hi, dp) => "(" + lo.toFixed(dp) + "–" + hi.toFixed(dp) + ")";
       out.push("");
-      out.push("  WHAT IT FITTED           fitted     prior said");
-      out.push("    asymptote T∞         " + (tInf.toFixed(1) + " °C").padStart(9)
-               + "   " + pr.tInfMean.toFixed(1) + " °C");
-      out.push("    time constant τ      " + (tau.toFixed(0) + " min").padStart(9)
-               + "   " + pr.tauMedian.toFixed(0) + " min");
-      out.push("    dead time            " + (lag.toFixed(0) + " min").padStart(9)
-               + "   " + pr.lagMedian.toFixed(0) + " min");
-      out.push("    largest miss         " + (worst.toFixed(1) + " °C").padStart(9)
-               + "   (in-sample, 3 parameters)");
+      out.push("  WHAT IT FITTED         fitted   5–95%            prior said");
+      out.push("    asymptote T∞       " + (tInf.toFixed(1) + " °C").padStart(9)
+               + "  " + band(qInf[0], qInf[1], 1).padEnd(16) + pr.tInfMean.toFixed(1) + " °C");
+      out.push("    time constant τ    " + (tau.toFixed(0) + " min").padStart(9)
+               + "  " + band(qTau[0], qTau[1], 0).padEnd(16) + pr.tauMedian.toFixed(0) + " min");
+      out.push("    dead time          " + (lag.toFixed(0) + " min").padStart(9)
+               + "  " + band(qLag[0], qLag[1], 0).padEnd(16) + pr.lagMedian.toFixed(0) + " min");
+      out.push("    largest miss       " + (worst.toFixed(1) + " °C").padStart(9)
+               + "  (in-sample, 3 parameters — small is expected, not evidence)");
+
+      // Whether those numbers are a measurement at all.  A steak pulled before
+      // its curve bent leaves T-inf and tau trading along a ridge: any pair with
+      // the same early slope fits as well, so the fit is a guess with small
+      // residuals.  The posterior's own width says so -- the prior's 5-95% span
+      // is about 49 °C, so a band still wider than half of that means the
+      // readings barely narrowed it.
+      const climbed = (st.readings[st.readings.length - 1].temp - t0) / (tInf - t0);
+      const pinned = (qInf[1] - qInf[0]) <= T_INF_PINNED_C;
 
       out.push("");
       out.push("  NEXT TIME");
+      // Measured, not fitted: this one holds however loose the posterior is.
       out.push("    · Same steak, same oven, from " + t0.toFixed(1) + " °C: allow "
                + fmtMins(took) + " to " + st.targetC.toFixed(1) + " °C.");
+
+      if (!pinned) {
+        out.push("    · The three numbers above are NOT pinned down by this cook."
+                 + " It came out " + Math.round(climbed * 100) + "% of the way to its own"
+                 + " fitted asymptote, before the curve had bent much, and until it bends"
+                 + " T∞ and τ trade off — raise both together and the readings fit just as"
+                 + " well. Treat them as a description of these readings, not as a"
+                 + " property of the steak, and do not carry them to the next cook.");
+      }
 
       // The opening guess, from the prior alone, against what happened: how far
       // out the card is before the second reading lands.
@@ -1964,7 +2033,7 @@ function buildReport() {
       // The tail: how slowly the last degrees arrive, which is what makes a
       // target hard to hit and what a cook should plan the sear around.
       const at = st.finalTemp == null ? st.targetC : st.finalTemp;
-      if (tInf > at + 0.5) {
+      if (pinned && tInf > at + 0.5) {
         const perMin = (tInf - at) / tau;
         out.push("    · At the pull it was gaining " + perMin.toFixed(2)
                  + " °C/min, so one degree of target is about "
@@ -1974,23 +2043,35 @@ function buildReport() {
       // surface, and the gap it leaves is the reason the first estimate is the
       // worst one.
       const drop = pr.tInfMean - tInf;
-      if (drop > 8) {
+      if (pinned && drop > 8) {
         out.push("    · The wet surface held the asymptote " + drop.toFixed(0)
                  + " °C below the prior's " + pr.tInfMean.toFixed(0)
                  + " °C. That gap is evaporation, and it is why the first reading is worth so much.");
       }
       const head = tInf - st.targetC;
-      if (head < 10) {
+      if (pinned && head < 10) {
         out.push("    · The asymptote sat only " + head.toFixed(1)
                  + " °C above target: the approach is slow and the estimate is sensitive there."
                  + " A hotter oven, or a drier surface, buys margin.");
       }
-      if (lag > 10) {
-        out.push("    · " + lag.toFixed(0) + " min of dead time — that is the wet surface."
-                 + " Patting it dry before it goes in removes most of it.");
+      // The dead time has three causes and the model has one parameter for them:
+      // the core's own conduction delay, a wet surface, and an oven that was
+      // still coming up.  It cannot tell them apart, so this may not claim one.
+      // What it can do is say which are on the table -- and a cold start is not
+      // a guess, it is something the cook told it.
+      if (lag > 8) {
+        out.push("    · " + lag.toFixed(0) + " min before the core moved at all."
+                 + " Three things make that number and the fit cannot separate them:"
+                 + " the time heat takes to reach the centre of "
+                 + st.thickMm + " mm, a wet surface"
+                 + (state.preheated ? "" : ", and an oven still warming")
+                 + ".");
+        out.push("      " + (state.preheated
+          ? "Patting the surface dry before it goes in is the part of it you can control."
+          : "On a cold start the oven is the likeliest bulk of it — see above."));
       }
       const ratio = tau / pr.tauMedian;
-      if (Math.abs(ratio - 1) > 0.15) {
+      if (pinned && Math.abs(ratio - 1) > 0.15) {
         out.push("    · It ran " + Math.round(Math.abs(ratio - 1) * 100) + "% "
                  + (ratio > 1 ? "slower" : "faster") + " than the geometry prior for this size."
                  + " Same cut and oven again, expect that again.");
@@ -2381,6 +2462,40 @@ $("fanToggle").addEventListener("click", e => {
   recompute(); rescheduleCheck(); save(); render();
 });
 
+/**
+ * Whether the oven was up to temperature when the steaks went in.
+ *
+ * This is *recorded*, not modelled, and that is a deliberate and measured
+ * decision.  A cold oven is real -- it delays the whole cook by roughly its own
+ * warm-up time constant, ten to fifteen minutes for a domestic oven -- and it
+ * lands almost entirely on the fitted `lag`: driving a fitted curve from a
+ * ramping ambient reports lag 3.8 / 9.6 / 15.6 min for warm-ups of 0 / 10 / 25
+ * min while tau and T-inf barely move.
+ *
+ * The obvious next step, moving `lagMedian` for a cold oven, is wrong, and the
+ * fix for it is not to guess harder.  A longer *assumed* dead time means the
+ * rise that was observed happened in less heating time, so the fit infers a
+ * faster steak and an earlier finish: against a real cold-started cook that
+ * needed 173 min, raising the prior from 6 to 18 min moved the estimate after
+ * two readings from 111 to 86.  It makes the app more optimistic exactly where
+ * a cold oven should make it less.  Representing this properly means a ramping
+ * ambient in the forward model, which is a change to the physics and belongs
+ * behind a closed-loop re-derivation, not behind a toggle.
+ *
+ * So it changes no prior and forces no refit.  What it does is stop the cook
+ * report attributing that dead time to a wet surface when the likelier half of
+ * it was an oven still coming up, and stop the card calling the prior "an oven
+ * this hot" when it is not yet.
+ */
+$("preheatToggle").addEventListener("click", e => {
+  const b = e.target.closest("button[data-pre]");
+  if (!b) return;
+  state.preheated = b.dataset.pre === "1";
+  [...$("preheatToggle").children].forEach(c => c.setAttribute("aria-pressed", String(c === b)));
+  // No refit and no rescheduleCheck(): nothing the model uses has changed.
+  save(); render();
+});
+
 // "Another" means another dinner, not another steak. The per-steak accessors
 // clear the selected steak only, which left the rest of the oven marked "out"
 // for ever -- and with no starting-temperature box to put them back in, since
@@ -2695,6 +2810,7 @@ $("massKg").value = firstSteak().massKg;
 $("thickMm").value = firstSteak().thickMm;
 $("firstName").value = firstSteak().name;
 [...$("fanToggle").children].forEach(c => c.setAttribute("aria-pressed", String((c.dataset.fan === "1") === !!state.fan)));
+[...$("preheatToggle").children].forEach(c => c.setAttribute("aria-pressed", String((c.dataset.pre === "1") === !!state.preheated)));
 if (state.startedAt) $("setup").open = false;
 recompute();
 // A cook resumed from storage keeps every promise it made; only a steak that
