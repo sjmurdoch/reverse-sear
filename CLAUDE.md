@@ -274,18 +274,38 @@ be ordered off that estimate. That is `SPREAD_WIDE_C`'s rule applied to a state
 the model cannot see. Setting `dueAt` there is safe for the same reason
 `adoptCoastPull()` is: it happens once, when information changes, not on a refit.
 
-**The chart's axis is sized from what the chart draws, so the series are
-computed before it.** `drawChart()` gathers the median curves and the band
-first, then derives `yLo`/`yHi` from the readings, the target *and* those
-curves. Sizing the axis from the target and the readings alone looks right
-until the target is changed mid-cook: raising it lengthens `tMax`, the curve
-climbs further before the right-hand edge, and at a 60 °C target the plot
-topped out at 70 while the 90% band reached 80 — painted straight over the
-axis labels and the card's padding. The band is the one thing allowed off the
-top (late in a long extrapolation it is wide enough to squash everything worth
-seeing into the bottom of the plot), so it is *clipped* to the plot rect rather
-than left to spill. The test is a pixel check — nothing painted above the
-plot — in `tests/cook.spec.js`, not a re-derivation of the formula.
+**The chart's axes belong to the oven, and are sized from what the chart
+draws.** Two rules, and `drawChart()` needs both.
+
+*One scale, whichever steak is selected.* Every input to the axes is taken over
+all the steaks on screen — the time origin, how far out the plot runs, every
+target, every reading, every median line — so tapping a row in the list moves
+the highlight and nothing else. The time origin is when the oven's *first*
+steak went in, not the selected one's: anchored to the selection, a steak that
+went in earlier plotted at negative minutes, off the left of the plot, and the
+whole chart slid sideways as the selection moved. Each steak is drawn from its
+own offset, and its line starts there — sampled from zero, the model reads its
+starting temperature for every minute before it went in and draws a flat run
+pinned to the left edge. Every steak's median is computed from the same draws
+at the same resolution for the same reason: the medians feed the axis, so a
+steak sampled one way while selected and another way while not moved the scale
+by a hair on every tap. Only the 90% band is selection-dependent, and it is
+drawn, not measured.
+
+*The axis is sized from what is drawn, so the series are computed before it.*
+Sizing it from the targets and the readings alone looks right until a target is
+changed mid-cook: raising it lengthens `tMax`, the curve climbs further before
+the right-hand edge, and at a 60 °C target the plot topped out at 70 while the
+90% band reached 80 — painted straight over the axis labels and the card's
+padding. The band is the one thing allowed off the top (late in a long
+extrapolation it is wide enough to squash everything worth seeing into the
+bottom of the plot), so it is *clipped* to the plot rect rather than left to
+spill. On one shared scale the curves converge, so the labels at the end of
+each are pushed apart before they are drawn.
+
+The tests are behavioural, not re-derivations of the formula: nothing painted
+above the plot (`tests/cook.spec.js`), and the axis strips coming out
+byte-identical from every steak (`tests/multisteak.spec.js`).
 
 **`render()` runs every second.** It must be cheap and idempotent. Anything
 rebuilt there can be replaced under the user's finger, which is why `setAction()`

@@ -1790,59 +1790,94 @@ function drawChart() {
   const band = css.getPropertyValue("--band").trim();
 
   const padL = 34, padR = 10, padT = 10, padB = 22;
-  const target = state.targetC;
+
+  // One scale for the whole oven, not for whichever steak is selected.
+  //
+  // Every input to the axes is taken over all the steaks on screen, so tapping
+  // a row in the list moves the highlight and nothing else.  That includes the
+  // origin of the time axis: it used to be the *selected* steak's start, so a
+  // steak added mid-cook redrew the chart against a different zero each time
+  // the selection moved -- and a steak that went in earlier than the selected
+  // one plotted at negative minutes, off the left of the plot entirely.  The
+  // oven's clock starts when its first steak went in, and every steak is drawn
+  // at its own offset from that.
+  const shown = state.steaks.filter(s => s.startedAt && fits.has(s.id));
+  const zero = shown.length ? Math.min(...shown.map(s => s.startedAt))
+             : ((cur() && cur().startedAt) || null);
+  const offOf = s => (zero && s.startedAt) ? (s.startedAt - zero) / 60000 : 0;
+  const ovenNow = zero ? (Date.now() - zero) / 60000 : 0;
+  const curOff = cur() ? offOf(cur()) : 0;
 
   let tMax = 60;
-  if (plan) tMax = Math.max(nowMin() + 6, (Number.isFinite(plan.hit[2]) ? plan.hit[2] : plan.next) * 1.12, 20);
-  else if (state.readings.length) tMax = Math.max(20, state.readings[state.readings.length - 1].t * 1.6);
+  if (shown.length) {
+    // Far enough out for the last steak to finish, not just the selected one.
+    const horizons = shown.map(s => {
+      const p = fits.get(s.id).plan;
+      return (offOf(s) + (Number.isFinite(p.hit[2]) ? p.hit[2] : p.next)) * 1.12;
+    });
+    tMax = Math.max(ovenNow + 6, ...horizons, 20);
+  } else if (state.readings.length) {
+    tMax = Math.max(20, state.readings[state.readings.length - 1].t * 1.6);
+  }
 
   // The curves are computed before the axis, not after it.  An axis derived
-  // from the target and the readings alone knows nothing about how far the
-  // curve climbs past the target in the time the chart spans, and raising the
-  // target mid-cook is exactly when that gap opens: at a 60 C target the plot
-  // ran to 70 C while the 90% band reached 80, and the overspill was painted
-  // across the axis labels and the card's padding.  So gather what will be
-  // drawn, then size the plot to hold it.
-  const N = 90;
-  let lo = null, mid = null, hi = null;
-  if (samples) {
-    lo = []; mid = []; hi = [];
-    const sub = samples.filter((_, i) => i % 3 === 0);
-    for (let i = 0; i <= N; i++) {
-      const t = tMax * i / N;
-      const p = pcts(sub.map(s => modelTemp(s, t)), [0.05, 0.5, 0.95]);
-      lo.push([t, p[0]]); mid.push([t, p[1]]); hi.push([t, p[2]]);
+  // from the targets and the readings alone knows nothing about how far a curve
+  // climbs past its target in the time the chart spans, and raising a target
+  // mid-cook is exactly when that gap opens: at a 60 C target the plot ran to
+  // 70 C while the 90% band reached 80, and the overspill was painted across
+  // the axis labels and the card's padding.  So gather what will be drawn,
+  // then size the plot to hold all of it.
+  //
+  // Bands are drawn for the selected steak alone -- three overlapping bands is
+  // mush -- so only it needs the outer percentiles.
+  const series = shown.map(st => {
+    const f = fits.get(st.id);
+    const off = offOf(st);
+    const own = !!cur() && st.id === cur().id;
+    // Same draws, same resolution, for every steak: the medians feed the axis,
+    // so a steak sampled one way while selected and another way while not would
+    // move the scale by a hair every time the selection changed.  Only the
+    // outer percentiles are selection-dependent, and they are drawn, not
+    // measured.
+    const draws = f.samples.filter((_, i) => i % 3 === 0);
+    const K = 90;
+    const lo = [], mid = [], hi = [];
+    // A steak's line starts where the steak did.  Sampled from 0, the model
+    // reads its starting temperature for every minute before it went in and
+    // draws a flat run pinned to the left edge -- a steak that is not in the
+    // oven, sitting at a temperature it never had there.
+    const span = Math.max(tMax - off, 0);
+    for (let i = 0; i <= K; i++) {
+      const tt = off + span * i / K;
+      const p = pcts(draws.map(th => modelTemp(th, tt - off)), own ? [0.05, 0.5, 0.95] : [0.5]);
+      mid.push([tt, own ? p[1] : p[0]]);
+      if (own) { lo.push([tt, p[0]]); hi.push([tt, p[2]]); }
     }
-  }
-  // The other steaks: median line only, directly labelled. Bands are drawn for
-  // the selected steak alone -- three overlapping bands is mush.
-  const others = [];
-  for (const other of state.steaks) {
-    if (other.id === (cur() || {}).id || !fits.has(other.id) || !other.startedAt) continue;
-    const of = fits.get(other.id);
-    const shift = (other.startedAt - (cur() || other).startedAt) / 60000;
-    const pts = [];
-    for (let k = 0; k <= 80; k++) {
-      const tt = tMax * k / 80;
-      pts.push([tt, pcts(of.samples.map(th => modelTemp(th, tt - shift)), [0.5])[0]]);
-    }
-    others.push({ steak: other, shift, pts });
-  }
+    return { steak: st, off, own, lo, mid, hi };
+  });
+  const mine = series.find(x => x.own) || null;
 
-  // Every temperature the chart puts on screen: the readings of every steak
-  // drawn, and the median lines.  Not the 90% band -- late in a long
+  // Every temperature the chart puts on screen: each steak's target, each
+  // steak's readings, and each median line.  Not the 90% band -- late in a long
   // extrapolation it is wide enough to squash everything worth looking at into
   // the bottom of the plot, so the band is the one thing allowed to run off the
   // top, and it is clipped to the plot rather than spilling over the axis.
-  const drawn = state.readings.map(r => r.temp);
-  for (const o of others) for (const r of o.steak.readings) drawn.push(r.temp);
-  const tops = (mid ? mid.map(p => p[1]) : []).concat(...others.map(o => o.pts.map(p => p[1])))
-    .filter(Number.isFinite);
-  const yLo = Math.min(0, ...drawn, target - 12);
-  const yHi = Math.max(target + 10, ...drawn.map(c => c + 4), ...tops.map(c => c + 2));
+  const temps = [];
+  for (const st of (shown.length ? shown : [cur()].filter(Boolean))) {
+    for (const r of st.readings) temps.push(r.temp);
+  }
+  const targets = [state.targetC, ...shown.map(st => st.targetC)].filter(Number.isFinite);
+  if (!targets.length) targets.push(44);
+  const tops = [].concat(...series.map(x => x.mid.map(p => p[1]))).filter(Number.isFinite);
+  const yLo = Math.min(0, ...temps, ...targets.map(c => c - 12));
+  const yHi = Math.max(...targets.map(c => c + 10), ...temps.map(c => c + 4), ...tops.map(c => c + 2));
 
   const X = t => padL + (t / tMax) * (w - padL - padR);
   const Y = c => padT + (1 - (c - yLo) / (yHi - yLo)) * (h - padT - padB);
+  const clipToPlot = () => {
+    g.save();
+    g.beginPath(); g.rect(padL, padT, w - padL - padR, h - padT - padB); g.clip();
+  };
 
   // grid + axis labels
   g.font = '10px "IBM Plex Mono", monospace';
@@ -1860,60 +1895,82 @@ function drawChart() {
     g.fillText(t.toFixed(0), X(t), h - padB + 5);
   }
 
-  if (mid) {
+  if (mine) {
     // uncertainty band + median line
-    g.save();
-    g.beginPath(); g.rect(padL, padT, w - padL - padR, h - padT - padB); g.clip();
+    clipToPlot();
     g.beginPath();
-    hi.forEach(([t, c], i) => i ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
-    for (let i = lo.length - 1; i >= 0; i--) g.lineTo(X(lo[i][0]), Y(lo[i][1]));
+    mine.hi.forEach(([t, c], i) => i ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
+    for (let i = mine.lo.length - 1; i >= 0; i--) g.lineTo(X(mine.lo[i][0]), Y(mine.lo[i][1]));
     g.closePath(); g.fillStyle = band; g.fill();
 
     g.beginPath();
-    mid.forEach(([t, c], i) => i ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
+    mine.mid.forEach(([t, c], i) => i ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
     g.strokeStyle = ember; g.lineWidth = 2; g.stroke();
     g.restore();
   }
 
-  // target line
+  // target line: the selected steak's, the one the readouts are about
+  const target = state.targetC;
   g.setLineDash([4, 4]); g.strokeStyle = ink3; g.lineWidth = 1;
   g.beginPath(); g.moveTo(padL, Y(target) + .5); g.lineTo(w - padR, Y(target) + .5); g.stroke();
   g.setLineDash([]);
 
   // next-action marker
   if (plan) {
-    const tn = Math.min(plan.next, tMax);
+    const tn = Math.min(curOff + plan.next, tMax);
     g.strokeStyle = plan.action === "coast" ? css.getPropertyValue("--good").trim() : ember;
     g.globalAlpha = .5; g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(X(tn), padT); g.lineTo(X(tn), h - padB); g.stroke();
     g.globalAlpha = 1;
-    // "now" marker
-    const t = Math.min(nowMin(), tMax);
+    // "now" marker, on the oven's clock
+    const t = Math.min(ovenNow, tMax);
     g.strokeStyle = ink3; g.globalAlpha = .35; g.lineWidth = 1;
     g.beginPath(); g.moveTo(X(t), padT); g.lineTo(X(t), h - padB); g.stroke();
     g.globalAlpha = 1;
   }
 
-  for (const { steak: other, shift, pts } of others) {
+  // The other steaks: median line only, directly labelled.
+  const labels = [];
+  for (const { steak: other, off, own, mid } of series) {
+    if (own) continue;
     const idx = Math.min(state.steaks.indexOf(other), MAX_STEAKS - 1) + 1;
     const col = css.getPropertyValue("--s" + idx).trim();
+    clipToPlot();
     g.beginPath();
-    pts.forEach(([t, c], k) => k ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
+    mid.forEach(([t, c], k) => k ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
     g.strokeStyle = col; g.lineWidth = 2; g.stroke();
-    const lastP = pts[pts.length - 1];
-    g.fillStyle = col; g.textAlign = "right"; g.textBaseline = "middle";
-    g.font = '600 10px "IBM Plex Mono", monospace';
-    g.fillText(other.name.split(/\s+/)[0].slice(0, 7), w - padR - 2, Y(lastP[1]));
-    g.font = '10px "IBM Plex Mono", monospace';
+    g.restore();
+    labels.push({ text: other.name.split(/\s+/)[0].slice(0, 7), col, y: Y(mid[mid.length - 1][1]) });
     for (const r of other.readings) {
-      g.beginPath(); g.arc(X(r.t + shift), Y(r.temp), 3.2, 0, Math.PI * 2);
+      g.beginPath(); g.arc(X(r.t + off), Y(r.temp), 3.2, 0, Math.PI * 2);
       g.fillStyle = col; g.fill();
     }
   }
 
+  // On one shared scale the curves converge, so the labels that sit at the end
+  // of each one land on top of each other.  Push them apart, top-down, keeping
+  // them inside the plot: a name is only useful if it can be read.
+  const LABEL_GAP = 12;
+  labels.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++) {
+    labels[i].y = Math.max(labels[i].y, labels[i - 1].y + LABEL_GAP);
+  }
+  const floorY = h - padB - 6;
+  for (let i = labels.length - 1; i >= 0; i--) {
+    labels[i].y = Math.min(labels[i].y, floorY - (labels.length - 1 - i) * LABEL_GAP);
+    if (i) labels[i - 1].y = Math.min(labels[i - 1].y, labels[i].y - LABEL_GAP);
+  }
+  g.textAlign = "right"; g.textBaseline = "middle";
+  g.font = '600 10px "IBM Plex Mono", monospace';
+  for (const l of labels) {
+    g.fillStyle = l.col;
+    g.fillText(l.text, w - padR - 2, Math.max(padT + 6, l.y));
+  }
+  g.font = '10px "IBM Plex Mono", monospace';
+
   // readings
   for (const r of state.readings) {
-    g.beginPath(); g.arc(X(r.t), Y(r.temp), 3.6, 0, Math.PI * 2);
+    g.beginPath(); g.arc(X(r.t + curOff), Y(r.temp), 3.6, 0, Math.PI * 2);
     g.fillStyle = cold; g.fill();
   }
 }

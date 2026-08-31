@@ -39,6 +39,99 @@ test.describe('three steaks, one oven', () => {
     for (const d of t.dueAts.filter(x => x != null)) expect(openAt).toBeLessThanOrEqual(d);
   });
 
+  test('the chart keeps one scale, whichever steak is selected', async ({ app }) => {
+    // The axes belong to the oven. Every input to them -- the time origin, how
+    // far out the plot runs, every target, every reading, every median line --
+    // is taken over all the steaks on screen, so tapping a row moves the
+    // highlight and nothing else. Taken from the selected steak alone, the plot
+    // re-scaled under the chef every time they looked at a different steak.
+    await app.seedMany(DINNER);
+    // The axis strips are the parts of the drawing that are not about the
+    // selection, so they must come out byte-identical.
+    const strips = async () => app.page.evaluate(() => {
+      const cv = document.getElementById('chart');
+      const g = cv.getContext('2d');
+      const dpr = cv.width / cv.clientWidth;
+      const hash = d => {
+        let n = 0;
+        for (let i = 0; i < d.length; i++) n = (Math.imul(n, 31) + d[i]) | 0;
+        return n;
+      };
+      // Just the tick labels: a reading dot sits on the plot's edge and bleeds
+      // a few pixels past it, and that dot really is about the selection.
+      const gutter = Math.round(26 * dpr);          // left of the y labels' right edge
+      const floor = cv.height - Math.round(18 * dpr);  // below anything drawn in the plot
+      return {
+        yAxis: hash(g.getImageData(0, 0, gutter, floor).data),
+        xAxis: hash(g.getImageData(0, floor, cv.width, cv.height - floor).data),
+      };
+    });
+
+    const ids = (await app.state()).steaks.map(s => s.id);
+    const seen = [];
+    for (const id of [...ids, ids[0]]) {
+      await app.page.evaluate(i => { state.current = i; recompute(); render(); }, id);
+      await app.settle();
+      seen.push(await strips());
+    }
+    for (const s of seen) {
+      expect(s.yAxis, 'the temperature axis is the same for every steak').toBe(seen[0].yAxis);
+      expect(s.xAxis, 'and so is the time axis').toBe(seen[0].xAxis);
+    }
+
+    // and the scale is reached by every steak, not just the selected one: a
+    // target raised on a steak the readouts are not pointed at still has to fit
+    await app.page.evaluate(i => { state.current = i; recompute(); render(); }, ids[0]);
+    await app.settle();
+    const narrow = await strips();
+    await app.page.evaluate(i => {
+      steakById(i).targetC = 95;    // far above anything else on the chart
+      recompute(); render();
+    }, ids[2]);
+    await app.settle();
+    const wide = await strips();
+    expect(wide.yAxis, "another steak's target widened the axis").not.toBe(narrow.yAxis);
+
+    // and that wider scale is still the same from every steak
+    const after = [];
+    for (const id of ids) {
+      await app.page.evaluate(i => { state.current = i; recompute(); render(); }, id);
+      await app.settle();
+      after.push(await strips());
+    }
+    for (const s of after) expect(s.yAxis).toBe(after[0].yAxis);
+  });
+
+  test('a steak that went in later is drawn on the oven\u2019s clock', async ({ app }) => {
+    // The time origin is when the oven's first steak went in, not when the
+    // selected one did. Anchored to the selection, a steak that went in earlier
+    // than the selected one plotted at negative minutes -- off the left of the
+    // plot -- and the whole chart slid sideways as the selection moved.
+    await app.seedMany(DINNER);
+    await app.page.evaluate(() => {
+      const s = state.steaks[1];
+      s.startedAt = s.startedAt + 18 * 60000;
+      s.readings = [[0, 12], [10, 22]].map(([t, temp]) => ({ t, temp }));
+      recompute(); render();
+    });
+    const spanOf = async () => app.page.evaluate(() => {
+      const shown = state.steaks.filter(s => s.startedAt && fits.has(s.id));
+      const zero = Math.min(...shown.map(s => s.startedAt));
+      return shown.map(s => +((s.startedAt - zero) / 60000).toFixed(1));
+    });
+    expect(await spanOf(), 'the late steak is offset, the others are at zero')
+      .toEqual([0, 18, 0]);
+
+    // and no reading of any steak lands left of the plot, whoever is selected
+    for (const st of (await app.state()).steaks) {
+      await app.page.evaluate(i => { state.current = i; recompute(); render(); }, st.id);
+      await app.settle();
+      const offs = await spanOf();
+      expect(Math.min(...offs), 'no steak is drawn before the oven started')
+        .toBeGreaterThanOrEqual(0);
+    }
+  });
+
   test('the readings table scores each steak against its own model', async ({ app }) => {
     // The sweep hands the card to the next unprobed steak with a bare render(),
     // no refit -- and `samples` is the *selected* steak's posterior. Left
