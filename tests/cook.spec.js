@@ -180,6 +180,43 @@ test.describe('logging readings', () => {
     expect(r.painted / r.total).toBeLessThan(0.9);       // and it is not a solid block
   });
 
+  test('the target can be changed mid-cook, and the chart re-frames around it',
+    async ({ app }) => {
+    // Raising the target lengthens the window the chart spans, so the curve
+    // climbs further before the right-hand edge. The axis used to be sized from
+    // the target and the readings alone, which know nothing about that: at a
+    // 60 °C target the plot topped out at 70 while the 90% band reached 80, and
+    // the overspill was painted across the axis labels. Nothing may be drawn
+    // outside the plot, whatever the target.
+    await app.seed([[0, 5], [14, 12], [28, 21], [44, 31]]);
+    const before = await app.state();
+    expect(before.targetC).toBe(44);
+
+    await app.page.evaluate(() => { document.getElementById('setup').open = true; });
+    await app.page.fill('#targetC', '60');
+    await app.settle();
+
+    const after = await app.state();
+    expect(after.targetC, 'the change took').toBe(60);
+    expect(after.planNext, 'and the plan moved with it').not.toBe(before.planNext);
+
+    const spill = await app.page.evaluate(() => {
+      const cv = document.getElementById('chart');
+      const g = cv.getContext('2d');
+      const dpr = cv.width / cv.clientWidth;
+      const padT = 10, padL = 34, padR = 10;   // drawChart's plot inset
+      const x0 = Math.round(padL * dpr);
+      const x1 = Math.round((cv.clientWidth - padR) * dpr);
+      const yTop = Math.round(padT * dpr) - 1;  // the strip above the plot
+      const d = g.getImageData(x0, 0, x1 - x0, yTop).data;
+      let painted = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 8) painted++;
+      return { painted, area: (x1 - x0) * yTop };
+    });
+    expect(spill.area, 'there is a strip to check').toBeGreaterThan(0);
+    expect(spill.painted, 'nothing is painted above the top of the plot').toBe(0);
+  });
+
   test('the elapsed clock in the masthead tracks real time', async ({ app }) => {
     await app.advance(17);
     const m = await app.page.textContent('#mastheadState');

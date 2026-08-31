@@ -1795,8 +1795,51 @@ function drawChart() {
   let tMax = 60;
   if (plan) tMax = Math.max(nowMin() + 6, (Number.isFinite(plan.hit[2]) ? plan.hit[2] : plan.next) * 1.12, 20);
   else if (state.readings.length) tMax = Math.max(20, state.readings[state.readings.length - 1].t * 1.6);
-  const yLo = Math.min(0, ...(state.readings.map(r => r.temp)), target - 12);
-  const yHi = Math.max(target + 10, ...(state.readings.map(r => r.temp + 4)));
+
+  // The curves are computed before the axis, not after it.  An axis derived
+  // from the target and the readings alone knows nothing about how far the
+  // curve climbs past the target in the time the chart spans, and raising the
+  // target mid-cook is exactly when that gap opens: at a 60 C target the plot
+  // ran to 70 C while the 90% band reached 80, and the overspill was painted
+  // across the axis labels and the card's padding.  So gather what will be
+  // drawn, then size the plot to hold it.
+  const N = 90;
+  let lo = null, mid = null, hi = null;
+  if (samples) {
+    lo = []; mid = []; hi = [];
+    const sub = samples.filter((_, i) => i % 3 === 0);
+    for (let i = 0; i <= N; i++) {
+      const t = tMax * i / N;
+      const p = pcts(sub.map(s => modelTemp(s, t)), [0.05, 0.5, 0.95]);
+      lo.push([t, p[0]]); mid.push([t, p[1]]); hi.push([t, p[2]]);
+    }
+  }
+  // The other steaks: median line only, directly labelled. Bands are drawn for
+  // the selected steak alone -- three overlapping bands is mush.
+  const others = [];
+  for (const other of state.steaks) {
+    if (other.id === (cur() || {}).id || !fits.has(other.id) || !other.startedAt) continue;
+    const of = fits.get(other.id);
+    const shift = (other.startedAt - (cur() || other).startedAt) / 60000;
+    const pts = [];
+    for (let k = 0; k <= 80; k++) {
+      const tt = tMax * k / 80;
+      pts.push([tt, pcts(of.samples.map(th => modelTemp(th, tt - shift)), [0.5])[0]]);
+    }
+    others.push({ steak: other, shift, pts });
+  }
+
+  // Every temperature the chart puts on screen: the readings of every steak
+  // drawn, and the median lines.  Not the 90% band -- late in a long
+  // extrapolation it is wide enough to squash everything worth looking at into
+  // the bottom of the plot, so the band is the one thing allowed to run off the
+  // top, and it is clipped to the plot rather than spilling over the axis.
+  const drawn = state.readings.map(r => r.temp);
+  for (const o of others) for (const r of o.steak.readings) drawn.push(r.temp);
+  const tops = (mid ? mid.map(p => p[1]) : []).concat(...others.map(o => o.pts.map(p => p[1])))
+    .filter(Number.isFinite);
+  const yLo = Math.min(0, ...drawn, target - 12);
+  const yHi = Math.max(target + 10, ...drawn.map(c => c + 4), ...tops.map(c => c + 2));
 
   const X = t => padL + (t / tMax) * (w - padL - padR);
   const Y = c => padT + (1 - (c - yLo) / (yHi - yLo)) * (h - padT - padB);
@@ -1817,16 +1860,10 @@ function drawChart() {
     g.fillText(t.toFixed(0), X(t), h - padB + 5);
   }
 
-  if (samples) {
+  if (mid) {
     // uncertainty band + median line
-    const N = 90;
-    const lo = [], mid = [], hi = [];
-    const sub = samples.filter((_, i) => i % 3 === 0);
-    for (let i = 0; i <= N; i++) {
-      const t = tMax * i / N;
-      const p = pcts(sub.map(s => modelTemp(s, t)), [0.05, 0.5, 0.95]);
-      lo.push([t, p[0]]); mid.push([t, p[1]]); hi.push([t, p[2]]);
-    }
+    g.save();
+    g.beginPath(); g.rect(padL, padT, w - padL - padR, h - padT - padB); g.clip();
     g.beginPath();
     hi.forEach(([t, c], i) => i ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
     for (let i = lo.length - 1; i >= 0; i--) g.lineTo(X(lo[i][0]), Y(lo[i][1]));
@@ -1835,6 +1872,7 @@ function drawChart() {
     g.beginPath();
     mid.forEach(([t, c], i) => i ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
     g.strokeStyle = ember; g.lineWidth = 2; g.stroke();
+    g.restore();
   }
 
   // target line
@@ -1856,19 +1894,9 @@ function drawChart() {
     g.globalAlpha = 1;
   }
 
-  // The other steaks: median line only, directly labelled. Bands are drawn for
-  // the selected steak alone -- three overlapping bands is mush.
-  for (const other of state.steaks) {
-    if (other.id === (cur() || {}).id || !fits.has(other.id) || !other.startedAt) continue;
-    const of = fits.get(other.id);
+  for (const { steak: other, shift, pts } of others) {
     const idx = Math.min(state.steaks.indexOf(other), MAX_STEAKS - 1) + 1;
     const col = css.getPropertyValue("--s" + idx).trim();
-    const shift = (other.startedAt - (cur() || other).startedAt) / 60000;
-    const pts = [];
-    for (let k = 0; k <= 80; k++) {
-      const tt = tMax * k / 80;
-      pts.push([tt, pcts(of.samples.map(th => modelTemp(th, tt - shift)), [0.5])[0]]);
-    }
     g.beginPath();
     pts.forEach(([t, c], k) => k ? g.lineTo(X(t), Y(c)) : g.moveTo(X(t), Y(c)));
     g.strokeStyle = col; g.lineWidth = 2; g.stroke();
