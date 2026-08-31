@@ -77,6 +77,22 @@ real check went past. Both are in `tests/multisteak.spec.js`, and
 `alarmIsArmedWhileCooking` / `alarmRingsAtTheTrip` in `spec/steak.qnt` are the
 same two rules — the second defect was found there first.
 
+**`samples` and `plan` are the selection's, and the selection moves without a
+refit.** They are `cur()`'s entry in `fits`, so everything keyed off them -- the
+card's live core estimate, the tau readout, the chart band, the readings table's
+"vs model" column -- is about whichever steak the readouts are pointed at. The
+log sweep hands the card to the next unprobed steak with a bare `render()`, and
+`recompute()` only runs on the 60 s timer, so for up to a minute every one of
+those numbers belonged to the steak before it: "vs model" scored a 28 mm
+sirloin's readings against a 48 mm ribeye's model and printed +6.9, +12.8 and
++13.1 where the sirloin's own residuals were −0.2, +0.8 and −0.9 — the column
+cannot be large at all, since it is an in-sample residual of a three-parameter
+fit to three readings. `render()` therefore calls `pointAtCurrent()`
+at the *top*, before its early returns -- the same shape as `checkAlarm()`.
+Re-pointing two references fits nothing and is idempotent, which is why it is
+not part of `recomputeAll()`. The regression test is "scores each steak against
+its own model" in `tests/multisteak.spec.js`.
+
 **Nothing that belongs to the whole oven may go through the per-steak
 accessors.** They read and write whichever steak is *selected*, so anything
 about the oven or about a specific steak has to name it: the Setup form's steak

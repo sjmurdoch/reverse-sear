@@ -953,12 +953,31 @@ function nextOpening() {
   return { openAt, orders, times };
 }
 
-function recompute() {
-  recomputeAll();
+// Which steak the readouts, the chart and the readings table are about.
+//
+// `samples` and `plan` are the *selected* steak's fit, so they go stale the
+// moment the selection moves -- and the selection moves without a refit: the
+// log sweep hands the card to the next unprobed steak between trips.  Every
+// number keyed off them then belonged to the steak before it, and the "vs
+// model" column scored one steak's readings against another steak's posterior:
+// a 28 mm sirloin read +6.9, +12.8 and +13.1 against a 48 mm ribeye's model
+// where its own residuals were -0.2, +0.8 and -0.9.  The card's live core
+// estimate, the tau readout and the chart band were wrong in the same window,
+// and stayed wrong until the 60 s refit came round.
+//
+// So this is not part of fitting.  It is cheap and idempotent -- it re-points
+// two references and fits nothing -- and render() calls it at the top, because
+// pointing the readouts at a steak is exactly what render() is doing.
+function pointAtCurrent() {
   const s = cur();
   const f = s ? fits.get(s.id) : null;
   samples = f ? f.samples : null;
   plan = f ? f.plan : null;
+}
+
+function recompute() {
+  recomputeAll();
+  pointAtCurrent();
   if (!plan) return;
   adoptCoastPull();
 }
@@ -1142,6 +1161,9 @@ function checkAlarm() {
   if (!ringing) alarmFired = false;
 }
 function render() {
+  // Before anything reads `samples` or `plan`: the selection can move without a
+  // refit, and those two are the selected steak's fit.  See pointAtCurrent().
+  pointAtCurrent();
   // With more than one in the oven the readouts below are about one of them, so
   // say which; unlabelled numbers next to three steaks are worse than no numbers.
   const who = state.steaks.length > 1 && cur() ? cur().name : null;
@@ -1726,8 +1748,9 @@ function buildLogRows() {
   return state.readings.map((r, i) => {
     let resid = "";
     if (med) {
-      const d = r.temp - modelTemp(med, r.t);
-      resid = (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(1);
+      // Round before taking the sign, or a residual of -0.04 prints as "−0.0".
+      const d = Math.round((r.temp - modelTemp(med, r.t)) * 10) / 10;
+      resid = (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d).toFixed(1);
     }
     return `<tr>
       <td>${r.t < 0.05 ? "start" : r.t.toFixed(1) + " min"}</td>

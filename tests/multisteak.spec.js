@@ -39,6 +39,30 @@ test.describe('three steaks, one oven', () => {
     for (const d of t.dueAts.filter(x => x != null)) expect(openAt).toBeLessThanOrEqual(d);
   });
 
+  test('the readings table scores each steak against its own model', async ({ app }) => {
+    // The sweep hands the card to the next unprobed steak with a bare render(),
+    // no refit -- and `samples` is the *selected* steak's posterior. Left
+    // pointing at the steak before it, the "vs model" column scored a 28 mm
+    // sirloin's readings against a 48 mm ribeye's model and printed double
+    // figures. These are in-sample residuals of a three-parameter fit to three
+    // readings: they cannot be large unless the wrong model is being used.
+    await app.seedMany(DINNER);
+    const t = await app.trip();
+    await app.drift(t.openInMin + 0.2);
+
+    expect(await app.dockLabel()).toMatch(/Ribeye — 1 of 3/);
+    await app.log(31.0);
+    expect(await app.dockLabel(), 'the card has moved on to the sirloin').toMatch(/Sirloin/);
+
+    const rows = await app.rows();
+    expect(rows.map(r => r[1]), 'and the table is the sirloin\u2019s')
+      .toEqual(['12.0 °C', '28.0 °C', '38.0 °C']);
+    for (const r of rows) {
+      const d = Math.abs(parseFloat(r[2].replace('\u2212', '-')));
+      expect(d, `vs model ${r[2]} at ${r[0]}`).toBeLessThan(2);
+    }
+  });
+
   test('everything gets probed while the door is open', async ({ app }) => {
     await app.seedMany(DINNER);
     const t = await app.trip();

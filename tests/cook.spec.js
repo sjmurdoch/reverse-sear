@@ -148,7 +148,9 @@ test.describe('logging readings', () => {
     await app.seed([[0, 5], [14, 12], [26, 22]]);
     const rows = await app.rows();
     for (const r of rows) {
-      expect(r[2], 'residual column').toMatch(/^[+−]\d+\.\d$/);
+      // Signed, except for an exact zero: the sign is taken after rounding, so
+      // a residual of -0.04 reads "0.0" rather than the nonsense "−0.0".
+      expect(r[2], 'residual column').toMatch(/^([+−]\d+\.\d|0\.0)$/);
     }
   });
 
