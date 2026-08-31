@@ -597,6 +597,72 @@ test.describe('the oven as a whole, not the steak on screen', () => {
     expect(await beeps(app), 'nothing in that oven is being cooked now').toBe(0);
   });
 
+  // A steak's history is the reason the list is there. Refusing the tap once a
+  // steak was out meant its readings, its curve and its numbers vanished at the
+  // moment it came out, and only a new cook could clear the screen again.
+  test('a steak that is out can still be read back', async ({ app }) => {
+    await app.seedMany(DINNER);
+    const ids = (await app.state()).steaks.map(s => s.id);
+    await app.page.evaluate(id => finishSteak(steakById(id)), ids[1]);
+    await app.settle();
+    expect((await app.state()).current, 'the card moves to one still cooking').toBe(ids[0]);
+
+    await app.page.click('#steakList .srow:nth-child(2)');
+    await app.settle();
+    expect((await app.state()).current, 'and the chef can go back to the one that is out')
+      .toBe(ids[1]);
+
+    // Its readings, not the selected-before steak's.
+    expect(await app.page.textContent('#readingsTitle')).toMatch(/Readings — Sirloin/);
+    expect((await app.rows()).map(r => r[1])).toEqual(['12.0 °C', '28.0 °C', '38.0 °C']);
+    const r = await app.read();
+    expect(r.label).toMatch(/Out of the oven — Sirloin/);
+    expect(r.coreNow).toMatch(/°C/);
+  });
+
+  test('the dock stays with the oven while a finished steak is on screen', async ({ app }) => {
+    // The dock was the selected steak's: reading back a steak that was out hid
+    // the only way to log a number for the two still in the oven.
+    await app.seedMany(DINNER);
+    const ids = (await app.state()).steaks.map(s => s.id);
+    await app.page.evaluate(id => finishSteak(steakById(id)), ids[1]);
+    await app.settle();
+    // Point the readouts at the steak on the board directly: the tap that does
+    // this for a chef is the previous test's, and what is under test here is
+    // what the dock does once they are pointed there.
+    await app.page.evaluate(id => { state.current = id; render(); }, ids[1]);
+    await app.settle();
+
+    expect((await app.read()).dockHidden, 'two steaks are still in there').toBe(false);
+    expect(await app.dockLabel(), 'and it names what the number would be about')
+      .toMatch(/Core °C — (Ribeye|Fillet)/);
+
+    await app.log(33.3);
+    const st = await app.state();
+    expect(st.steaks[1].readings.length, 'nothing is logged against a steak on the board').toBe(3);
+    expect(st.steaks[0].readings[st.steaks[0].readings.length - 1].temp).toBe(33.3);
+  });
+
+  test('the card of a steak that is out cannot wipe a cook still running', async ({ app }) => {
+    await app.seedMany(DINNER);
+    const ids = (await app.state()).steaks.map(s => s.id);
+    await app.page.evaluate(id => finishSteak(steakById(id)), ids[1]);
+    await app.settle();
+    await app.page.click('#steakList .srow:nth-child(2)');
+    await app.settle();
+
+    const labels = await app.page.$$eval('#verdictActs button', bs => bs.map(b => b.textContent));
+    expect(labels.join(' '), 'starting another cook would throw away two live cooks')
+      .not.toMatch(/start another/i);
+    expect(labels.join(' ')).toMatch(/back to the cook/i);
+    expect((await app.read()).why).toMatch(/2 steaks are still in the oven/);
+
+    await app.page.click('#verdictActs button:last-child');
+    await app.settle();
+    const cur = (await app.state()).current;
+    expect([ids[0], ids[2]], 'and it lands on one that is actually cooking').toContain(cur);
+  });
+
   test('starting another cook clears the whole oven', async ({ app }) => {
     // It cleared the selected steak only. The other two stayed marked "out" for
     // ever, and a steak that has started shows no starting-temperature box, so

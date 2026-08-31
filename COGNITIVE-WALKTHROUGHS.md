@@ -1044,3 +1044,160 @@ Run under `iphone-chromium`, the fallback project: the Playwright CDN is blocked
 from this sandbox, so WebKit — the browser that matters, and the one that catches
 elements rebuilt under a finger — ran in CI on the pushed commit rather than
 here.
+
+---
+
+## Walkthrough 7 — the cook who wants to do this again
+
+**Persona.** The same busy cook, on the other side of dinner: the steaks are on
+the board, the sear is next, and the thing they now want from the phone is not
+an instruction but a record. They cook this again in a fortnight, and the
+question they will ask then is *how long did the thick one take, and did the app's
+first guess get it right?*
+
+**Scenario.** Two steaks in together, both probed on the same trips, the small
+one out first and the big one twelve minutes later. Then the morning after.
+
+**Task stages walked.** The first pull, with one steak out and two still in →
+looking back at what the one that is out actually did → the last pull → the
+record, and the record a fortnight later.
+
+**How it was walked.** In a headless iPhone context against a controllable clock,
+seeded into a two- and three-steak cook and driven the way this cook drives it —
+including the tap that turned out to do nothing.
+
+**What held.** Everything the previous six walkthroughs put in: the trip, the
+sweep, the sticky schedule, the reversible pull, the alarm. The failures here are
+all at the end of the cook, which is a stage none of the earlier walkthroughs
+went past.
+
+### 1. A steak's history vanished the moment it came out
+
+**Stage:** the first pull, with two steaks still in. **Question failed:** 2, and
+3 behind it.
+
+The Sirloin comes out at 19:31. `finishSteak()` moves the readouts to a steak
+that is still cooking — correctly, that is where the cook's attention is going —
+and the Sirloin's four readings, its curve and its numbers leave the screen with
+it. Tapping its row in the list, which is the one gesture the whole list teaches,
+does nothing at all:
+
+```js
+const st = steakById(row.dataset.s);
+if (!st || st.finishedAt) return;      // ← the tap that did nothing
+```
+
+The row is drawn, it is dark, it says *out at 19:31 · 52.0 °C* — and it does not
+respond. So the answer to "what did that one actually do" was: nothing, ever
+again, short of starting a new cook and losing the rest of the dinner too. The
+readings still existed in `localStorage` the whole time; there was simply no way
+back to them.
+
+**Change.** The tap is accepted for a steak that is out. Its readings, its
+residuals, its band and its card come back exactly as they were. Three things
+had to follow it, because every one of them read the *selection* where it should
+have read the oven:
+
+- **The dock.** It was shown when the *selected* steak was cooking, so looking
+  back at the Sirloin hid the only way to log a number for the two steaks still
+  in the oven. It is now shown while anything is in there, and `logTarget()`
+  points the number at a steak that can still take one — the sweep's, else the
+  selected one, else the first still cooking. A reading about a steak on a board
+  is not a reading.
+- **The masthead.** It said *done* while two steaks were still cooking, because
+  the one being looked at was out. It reads the oven's clock.
+- **"Start another cook".** On the finished card it clears *every* steak — so on
+  the card of a steak that is out, with two live cooks behind it, it is a button
+  that throws both away. It is not offered while anything is in the oven; the
+  card offers **Back to the cook** instead, which is also the way back that
+  reading a record needs.
+
+### 2. The chart drew a steak that was out as though it were still cooking
+
+**Stage:** the same. **Question failed:** 4 — the screen said something that was
+not true.
+
+A finished steak keeps its fit, and the chart was drawing it from the plan it
+held at the moment it came out: the line went on climbing to the right-hand edge,
+and the axis was stretched to a finish forty minutes after the steak was on a
+plate. On a chart whose whole job is comparing the steaks in one oven, one of
+them was a fiction.
+
+**Change.** A steak that is out is drawn as far as its pull and no further, and
+its stale plan is kept out of the axis. The next-action marker and the "now" line
+belong to a steak that is still in the oven.
+
+### 3. There was nothing to take away
+
+**Stage:** the morning after. **Question failed:** 1 — the goal was not one the
+interface had.
+
+Everything worth knowing about the cook existed: the settings, every reading,
+the three fitted parameters, and the gap between what the prior expected and what
+happened. All of it was on screen in pieces, none of it in a form that could
+leave the phone, and all of it one **Start another steak** away from being gone.
+The next cook of the same steak therefore started from the same prior as the
+first one — which, for a wet 48 mm steak, is 25 °C wrong about the asymptote.
+
+**Change.** When every steak that went in has come out, a **Cook report** card
+appears under the readings and stays until the next cook is started. It is plain
+text, and it carries:
+
+- the oven, and how many times its door was opened — reconstructed from when the
+  readings were taken, since readings within three minutes of each other *are*
+  one trip;
+- per steak: mass, thickness, target, start temperature, in and out times, the
+  elapsed minutes, and the estimate it came out at;
+- every reading, with its residual against the fitted curve;
+- the three fitted parameters beside the prior they started from;
+- and a **NEXT TIME** section that is arithmetic on the fit rather than advice:
+  how long to allow for the same steak, how far out the app's opening estimate
+  was and in which direction, how many minutes a degree of target costs at the
+  pull (`τ/(T∞ − T)`), how far the wet surface held the asymptote below the
+  prior, and — when it applies — that the asymptote sat close enough to target
+  for the approach to be slow, or that the dead time was long enough to be worth
+  patting the surface dry.
+
+**Share** goes to `navigator.share`, which on an iPhone is the system share
+sheet, so the report lands in Notes or Messages in two taps; **Copy** goes to the
+clipboard, with the report selected in place as the fallback for a browser that
+refuses either. A dismissed share sheet is an `AbortError` and is treated as what
+it is — the cook changing their mind — not as a failure to fall back from.
+
+The report is a pure function of the saved cook, so it survives a reload
+unchanged, and nothing in it ticks: `render()` runs every second over a block of
+text the cook may be part-way through selecting.
+
+### Deliberately not changed
+
+- **The record after the pull is still the model's estimate.** Walkthrough 6's
+  argument stands, and the report says so in the line that carries the number
+  rather than quietly presenting it as a measurement.
+- **No history across cooks.** "Until a new cook is started" is exactly where
+  this stops: `startAnother()` still clears everything. A cook that keeps the
+  last twenty dinners is a different app with a different first screen, and the
+  report is the thing that carries a cook forward — off the phone, where the cook
+  decides what to keep.
+- **The report is not a prior.** It says what this cook fitted and how far the
+  prior was out; it does not feed that back into `buildPriors()`. Pooling a
+  kitchen's own history into the prior is the standing modelling proposal
+  (it would move every posterior, and with it `COAST_UNDERSHOOT_C` and the parity
+  fixture), and it is not something to slip in behind a record card.
+- **Nothing was added to `advise()`.** As in walkthroughs 3, 5 and 6, every
+  change here is the interface keeping what it already knew.
+
+### Verification
+
+Ten regression tests — three in `multisteak.spec.js`, seven in the new
+`report.spec.js` — and all ten fail on the code as it was. Six fail at the
+assertion that names the defect: the tap that did nothing, the dock that went
+with it, the card that offered to wipe two live cooks, and the three that ask a
+report that did not exist for the oven, the readings and the fit. The remaining
+four are guards on what this change must not break — that the report's text is
+identical across render ticks and its element survives them, that a dismissed
+share sheet copies nothing, and that the report survives a reload and goes when
+the next cook starts — and they fail on the old code only because there is
+nothing there to guard.
+
+Run under `iphone-chromium` here; WebKit — the browser that matters, and the one
+that catches an element rebuilt under a finger — ran in CI on the pushed commit.

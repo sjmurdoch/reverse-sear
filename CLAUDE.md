@@ -93,6 +93,35 @@ Re-pointing two references fits nothing and is idempotent, which is why it is
 not part of `recomputeAll()`. The regression test is "scores each steak against
 its own model" in `tests/multisteak.spec.js`.
 
+**A steak's history stays reachable until a new cook is started.** A steak that
+is out can still be selected — that is how its readings, its curve and its
+numbers are read back — so every rule about the selection now has to hold with
+the readouts pointed at a steak on a board. Three follow from it. The **dock is
+the oven's**: it is shown while anything is still in there, and `logTarget()`
+keeps the number pointed at a steak that can still take one, because a reading
+about a steak on the board is not a reading. The **masthead is the oven's** for
+the same reason — "done" while two steaks are still in is a lie about the
+kitchen. And the finished card, while others cook, must not offer **"Start
+another cook"**, which clears every steak: it offers the way back to the cook
+instead. `startAnother()` is the line the history is kept until, and the only
+thing that crosses it.
+
+**The chart draws a finished steak as history, not as a prediction.** Its line
+stops at its pull and its stale plan is kept out of the axis: left in, the
+horizon stretched to a finish that was never going to happen and the curve went
+on climbing across a chart of a dinner that was over. The next-action marker and
+the "now" line belong to a steak that is still in the oven.
+
+**The cook report may not tick.** `renderReport()` runs inside `render()`, once a
+second, and the report is a block of text the cook may be part-way through
+selecting: every number in it is anchored to the cook, never to the clock, so the
+text is byte-identical from one tick to the next and the `<pre>` is never
+rewritten. It appears when every steak that went in has come out
+(`cookIsOver()`), and `buildReport()` is a pure function of the saved state — so
+it survives a reload unchanged. Share goes through `navigator.share` (the iOS
+share sheet); an `AbortError` from it is the sheet being dismissed and must not
+be treated as a failure or silently turned into a copy.
+
 **Nothing that belongs to the whole oven may go through the per-steak
 accessors.** They read and write whichever steak is *selected*, so anything
 about the oven or about a specific steak has to name it: the Setup form's steak

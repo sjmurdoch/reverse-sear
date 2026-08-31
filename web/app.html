@@ -193,6 +193,22 @@
   input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible {
     outline: 2px solid var(--ember); outline-offset: 2px;
   }
+  /* ---------- the cook report ---------- */
+  .report { display: flex; flex-direction: column; gap: 12px; }
+  .report pre {
+    margin: 0; padding: 12px; border-radius: 10px;
+    background: var(--surface-2); border: 1px solid var(--line-soft);
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--ink-2);
+    /* The report is meant to be taken away: it can be selected and copied by
+       hand on any phone whose share sheet or clipboard the page cannot reach. */
+    -webkit-user-select: text; user-select: text;
+    max-height: 46vh; overflow: auto; -webkit-overflow-scrolling: touch;
+    white-space: pre; tab-size: 2;
+  }
+  .report .acts { display: flex; gap: 10px; }
+  .report .acts button { flex: 1; }
+  .report .acts button.hidden { display: none; }
+
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
   .pane { display: flex; flex-direction: column; gap: 10px; }
@@ -371,6 +387,18 @@
     </table>
   </section>
 
+  <div class="section-title hidden" id="reportTitle">Cook report</div>
+  <section class="card report hidden" id="reportCard">
+    <p class="note">What this cook was, what it did and what it says about doing it again — keep it, and
+      the next one of these starts from a measurement instead of a prior.</p>
+    <pre id="reportText" tabindex="0"></pre>
+    <div class="acts">
+      <button class="primary hidden" id="shareBtn" type="button">Share</button>
+      <button class="ghost" id="copyBtn" type="button">Copy</button>
+    </div>
+    <p class="dockwarn" id="reportNote" role="status"></p>
+  </section>
+
   <details class="setup" id="setup" open>
     <summary><span>Setup</span><span id="setupDigest" style="letter-spacing:.04em;text-transform:none"></span></summary>
     <div class="body">
@@ -462,7 +490,7 @@
     </div>
   </details>
 
-  <footer class="stamp"><!--BUILD-->development build<!--/BUILD--></footer>
+  <footer class="stamp" id="buildStamp"><!--BUILD-->development build<!--/BUILD--></footer>
 </div>
 
 <div class="dock hidden" id="dock">
@@ -1219,6 +1247,7 @@ function render() {
   renderSteakList();
   renderExtraSteaks();
   renderPassLabel();
+  renderReport();
   checkAlarm();
   $("addBtn").disabled = state.steaks.length >= MAX_STEAKS;
   $("addBtn").textContent = state.steaks.length >= MAX_STEAKS
@@ -1227,19 +1256,27 @@ function render() {
   const v = $("verdict");
   const started = !!state.startedAt;
   const finished = !!state.finishedAt;
-  const active = started && !finished && !isStale();
+  // The dock is the oven's, not the selected steak's: with the readouts pointed
+  // at a steak that is already on the board -- which is how its history is read
+  // back -- there is still a cook running and still a number to log.  With one
+  // steak this is the same condition it always was.
+  const cooking = activeSteaks().length > 0 && !isStale();
 
-  $("dock").classList.toggle("hidden", !active);
+  $("dock").classList.toggle("hidden", !cooking);
   // A refusal outranks a query: the cook has a number to correct either way.
-  const warn = dockNote || (started && !finished ? suspectDropAny() : "");
+  const warn = dockNote || (cooking ? suspectDropAny() : "");
   if ($("dockWarn").textContent !== warn) $("dockWarn").textContent = warn;
   // Before the first reading these are three empty cards between "Set up your
   // steak" and the form that does it, pushing the form off the bottom of the
   // phone.  Show them once there is something in them.
   ["statsRow", "chartCard", "readingsTitle", "readingsCard"].forEach(id =>
     $(id).classList.toggle("hidden", !started));
-  $("mastheadState").textContent = finished
-    ? "done"
+  // Also the oven's: "done" while two steaks are still in there, because the
+  // one being looked at is out, is a lie about the kitchen.
+  const ovenStart = Math.min(...activeSteaks().map(s => s.startedAt));
+  $("mastheadState").textContent = cooking
+    ? fmtClock((Date.now() - ovenStart) / 60000) + " elapsed"
+    : finished ? "done"
     : started ? fmtClock(nowMin()) + " elapsed" : "not started";
 
   $("setupDigest").textContent = several
@@ -1281,11 +1318,16 @@ function render() {
     // one out of a 125 °C fan oven, 4.5 °C for the steak this app defaults to.
     // The cook picks the target believing this sentence, so it has to be true.
     const carry = "two or three degrees for a thin steak from a gentle oven, five or more for a thick one or a fan";
-    $("verdictWhy").textContent = short
+    const why = short
       ? `That is ${(state.targetC - state.finalTemp).toFixed(1)} °C short of your ${state.targetC} °C target, ` +
         `and the rest is worth ${carry}. Too raw? Put it back in — the cook picks up where it left off.`
       : `Rest it — the core keeps climbing off the heat, ${carry}, and the sear adds more. ` +
         "Sear when you are ready.";
+    const stillIn = activeSteaks();
+    $("verdictWhy").textContent = stillIn.length
+      ? why + (stillIn.length === 1 ? ` ${stillIn[0].name} is still in the oven.`
+                                    : ` ${stillIn.length} steaks are still in the oven.`)
+      : why;
     // The pull is the one irreversible action in the app, and a cook has plenty
     // of reasons to undo it: the board probe reads under target, the guests are
     // twenty minutes away, or a wet thumb found the button. The way back keeps
@@ -1295,14 +1337,26 @@ function render() {
     const backable = Date.now() - state.finishedAt < BACK_WINDOW_MIN * 60000;
     const back = '<button class="ghost" type="button">Back in the oven</button>';
     const again = `<button class="ghost" type="button">${several ? "Start another cook" : "Start another steak"}</button>`;
-    // Whichever is the likely next move goes first: a steak that came out short
-    // is one the cook is deciding about now; one that came out at temperature is
-    // resting, and the next thing is the next dinner.
-    setAction(actsEl,
-      (several ? "again-many" : "again") + (backable ? (short ? "+back-first" : "+back") : ""),
-      backable && short ? back + again : backable ? again + back : again,
-      backable && short ? [resumeCook, startAnother]
-        : backable ? [startAnother, resumeCook] : [startAnother]);
+    if (cooking) {
+      // This card is being read while the rest of the dinner is still in the
+      // oven -- the cook has tapped a steak that is out to see what it did.
+      // "Start another cook" clears every steak, so offering it here is a
+      // button that throws away two live cooks; and the way back to the one in
+      // progress has to be on the card, not only in the list.
+      const goBack = '<button class="ghost" type="button">Back to the cook</button>';
+      setAction(actsEl, "done-others" + (backable ? "+back" : ""),
+        backable ? back + goBack : goBack,
+        backable ? [resumeCook, backToTheCook] : [backToTheCook]);
+    } else {
+      // Whichever is the likely next move goes first: a steak that came out
+      // short is one the cook is deciding about now; one that came out at
+      // temperature is resting, and the next thing is the next dinner.
+      setAction(actsEl,
+        (several ? "again-many" : "again") + (backable ? (short ? "+back-first" : "+back") : ""),
+        backable && short ? back + again : backable ? again + back : again,
+        backable && short ? [resumeCook, startAnother]
+          : backable ? [startAnother, resumeCook] : [startAnother]);
+    }
     if (state.finalTemp != null) {
       $("statNow").innerHTML = state.finalTemp.toFixed(1) + '<span class="unit"> °C</span>';
       // It is the model's number, not the probe's: nothing was measured at the
@@ -1600,7 +1654,11 @@ function renderPassLabel() {
   const pass = passState();
   if (!pass) {
     const running = activeSteaks();
-    el.textContent = running.length > 1 && cur() ? `Core °C — ${cur().name}` : "Core °C";
+    // Name the steak the number will land on, which is not always the selected
+    // one: the readouts may be pointed at a steak that is already out.
+    const tgt = logTarget();
+    const name = tgt && (running.length > 1 || (cur() && tgt.id !== cur().id));
+    el.textContent = name ? `Core °C — ${tgt.name}` : "Core °C";
     return;
   }
   el.textContent = pass.target
@@ -1771,6 +1829,253 @@ function medianParams() {
   return medCache;
 }
 
+/* ------------------------------------------------------------------ *
+ * The cook report
+ *
+ * A cook is a measurement, and the next one of these should start from it
+ * rather than from the prior all over again.  So when everything is out, the
+ * page writes down what it was, what it did, and the three fitted numbers --
+ * with what they imply for doing it again -- in plain text that goes into the
+ * iOS share sheet, a note, or a message.
+ *
+ * Nothing in it may tick.  render() runs every second, and a report whose text
+ * changes under the finger is a report that cannot be selected by hand, so
+ * every number here is anchored to the cook rather than to the clock.
+ * ------------------------------------------------------------------ */
+
+/** Every steak that actually went into the oven, oldest zero first. */
+function cookedSteaks() {
+  return state.steaks.filter(s => s.startedAt && s.readings.length)
+    .slice().sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** The cook is over when everything that went in has come out again. */
+function cookIsOver() {
+  const done = cookedSteaks();
+  return done.length > 0 && done.every(s => s.finishedAt);
+}
+
+/**
+ * How many times the door was opened, reconstructed from when the readings
+ * were taken: readings within three minutes of each other are one trip, which
+ * is the whole point of batching them.
+ */
+function ovenOpenings() {
+  const at = [];
+  for (const s of cookedSteaks()) {
+    for (const r of s.readings) if (r.t > 0.05) at.push(s.startedAt + r.t * 60000);
+  }
+  at.sort((a, b) => a - b);
+  let n = 0, last = -Infinity;
+  for (const t of at) { if (t - last > 3 * 60000) n++; last = t; }
+  return n;
+}
+
+/** Minutes from a steak's zero to `temp` on one parameter vector, or null. */
+function timeToReach(th, temp) {
+  const [logTau, tInf, lag, t0] = th;
+  if (!(tInf > temp + 0.05) || !(tInf > t0)) return null;
+  return lag + Math.exp(logTau) * Math.log((tInf - t0) / (tInf - temp));
+}
+
+function fmtDay(epoch) {
+  return new Date(epoch).toLocaleDateString([],
+    { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+function fmtMins(m) {
+  return Math.round(m) + " min";
+}
+
+function buildReport() {
+  const done = cookedSteaks();
+  if (!done.length) return "";
+  const out = [];
+  const zero = Math.min(...done.map(s => s.startedAt));
+  const last = Math.max(...done.map(s => s.finishedAt || s.startedAt));
+  const stamp = ($("buildStamp") || {}).textContent || "";
+
+  out.push("REVERSE SEAR — COOK REPORT");
+  out.push(fmtDay(last) + " · in at " + fmtWallClock(zero)
+           + ", " + (done.length > 1 ? "last out at " : "out at ") + fmtWallClock(last));
+  out.push("");
+  out.push("OVEN");
+  out.push("  " + state.ovenC + " °C, " + (state.fan ? "fan" : "conventional"));
+  out.push("  " + done.length + (done.length === 1 ? " steak" : " steaks, in together")
+           + " · door opened " + ovenOpenings() + (ovenOpenings() === 1 ? " time" : " times"));
+
+  for (const st of done) {
+    const f = fits.get(st.id);
+    const th = f ? [0, 1, 2, 3].map(j => pcts(f.samples.map(x => x[j]), [0.5])[0]) : null;
+    const pr = buildPriors({ ovenC: state.ovenC, fan: state.fan,
+                             massKg: st.massKg, thickMm: st.thickMm });
+    const took = (st.finishedAt - st.startedAt) / 60000;
+    const t0 = st.readings[0].temp;
+
+    out.push("");
+    out.push(st.name.toUpperCase());
+    out.push("  " + st.massKg.toFixed(2) + " kg · " + st.thickMm + " mm thick · target "
+             + st.targetC.toFixed(1) + " °C");
+    out.push("  In at " + fmtWallClock(st.startedAt) + " from " + t0.toFixed(1) + " °C, out at "
+             + fmtWallClock(st.finishedAt) + " — " + fmtMins(took));
+    out.push("  Out at " + (st.finalTemp == null ? "—" : st.finalTemp.toFixed(1) + " °C")
+             + " (the model's estimate — nothing is measured at the pull)");
+
+    out.push("");
+    out.push("  READINGS");
+    out.push("    elapsed   core     vs fit");
+    let worst = 0;
+    for (const r of st.readings) {
+      const fit = th ? modelTemp(th, r.t) : null;
+      const d = fit == null ? null : Math.round((r.temp - fit) * 10) / 10;
+      if (d != null) worst = Math.max(worst, Math.abs(d));
+      out.push("    " + (r.t < 0.05 ? "start" : r.t.toFixed(1)).padStart(7)
+               + "   " + r.temp.toFixed(1).padStart(5)
+               + "    " + (d == null ? "" : (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d).toFixed(1)));
+    }
+
+    if (th) {
+      const tau = Math.exp(th[0]), tInf = th[1], lag = th[2];
+      out.push("");
+      out.push("  WHAT IT FITTED           fitted     prior said");
+      out.push("    asymptote T∞         " + (tInf.toFixed(1) + " °C").padStart(9)
+               + "   " + pr.tInfMean.toFixed(1) + " °C");
+      out.push("    time constant τ      " + (tau.toFixed(0) + " min").padStart(9)
+               + "   " + pr.tauMedian.toFixed(0) + " min");
+      out.push("    dead time            " + (lag.toFixed(0) + " min").padStart(9)
+               + "   " + pr.lagMedian.toFixed(0) + " min");
+      out.push("    largest miss         " + (worst.toFixed(1) + " °C").padStart(9)
+               + "   (in-sample, 3 parameters)");
+
+      out.push("");
+      out.push("  NEXT TIME");
+      out.push("    · Same steak, same oven, from " + t0.toFixed(1) + " °C: allow "
+               + fmtMins(took) + " to " + st.targetC.toFixed(1) + " °C.");
+
+      // The opening guess, from the prior alone, against what happened: how far
+      // out the card is before the second reading lands.
+      const guess = timeToReach([Math.log(pr.tauMedian), pr.tInfMean, pr.lagMedian, t0], st.targetC);
+      if (guess != null) {
+        const off = took - guess;
+        out.push("    · Before any reading the app expected " + fmtMins(guess) + ", so it was "
+                 + fmtMins(Math.abs(off)) + (off > 0 ? " optimistic" : " pessimistic")
+                 + " until the second reading landed.");
+      }
+
+      // The tail: how slowly the last degrees arrive, which is what makes a
+      // target hard to hit and what a cook should plan the sear around.
+      const at = st.finalTemp == null ? st.targetC : st.finalTemp;
+      if (tInf > at + 0.5) {
+        const perMin = (tInf - at) / tau;
+        out.push("    · At the pull it was gaining " + perMin.toFixed(2)
+                 + " °C/min, so one degree of target is about "
+                 + (1 / perMin).toFixed(1) + " min.");
+      }
+      // The whole argument of this tool, measured: the prior cannot see the wet
+      // surface, and the gap it leaves is the reason the first estimate is the
+      // worst one.
+      const drop = pr.tInfMean - tInf;
+      if (drop > 8) {
+        out.push("    · The wet surface held the asymptote " + drop.toFixed(0)
+                 + " °C below the prior's " + pr.tInfMean.toFixed(0)
+                 + " °C. That gap is evaporation, and it is why the first reading is worth so much.");
+      }
+      const head = tInf - st.targetC;
+      if (head < 10) {
+        out.push("    · The asymptote sat only " + head.toFixed(1)
+                 + " °C above target: the approach is slow and the estimate is sensitive there."
+                 + " A hotter oven, or a drier surface, buys margin.");
+      }
+      if (lag > 10) {
+        out.push("    · " + lag.toFixed(0) + " min of dead time — that is the wet surface."
+                 + " Patting it dry before it goes in removes most of it.");
+      }
+      const ratio = tau / pr.tauMedian;
+      if (Math.abs(ratio - 1) > 0.15) {
+        out.push("    · It ran " + Math.round(Math.abs(ratio - 1) * 100) + "% "
+                 + (ratio > 1 ? "slower" : "faster") + " than the geometry prior for this size."
+                 + " Same cut and oven again, expect that again.");
+      }
+    }
+  }
+
+  if (done.length > 1) {
+    const order = done.slice().sort((a, b) => a.finishedAt - b.finishedAt);
+    out.push("");
+    out.push("THE DINNER");
+    out.push("  Out in this order: " + order.map(s =>
+      s.name + " " + fmtWallClock(s.finishedAt)).join(", "));
+    const spread = (order[order.length - 1].finishedAt - order[0].finishedAt) / 60000;
+    out.push(spread < 0.5
+      ? "  They came out together."
+      : "  " + fmtMins(spread) + " between the first and the last out"
+        + (spread > 10 ? " — worth staggering them into the oven next time." : "."));
+    out.push("  " + ovenOpenings() + " openings for " + done.length
+             + " steaks: one trip probes everything, which is why that number is not "
+             + done.length + " times the checks.");
+  }
+
+  out.push("");
+  out.push("Readings are °C at the core; elapsed is minutes from that steak's own zero.");
+  out.push("Model: T = T∞ − (T∞ − T₀)·exp(−(t − lag)/τ), fitted to the readings above.");
+  if (stamp) out.push(stamp);
+  return out.join("\n");
+}
+
+let lastReport = null;
+function renderReport() {
+  const over = cookIsOver();
+  $("reportTitle").classList.toggle("hidden", !over);
+  $("reportCard").classList.toggle("hidden", !over);
+  if (!over) { lastReport = null; return; }
+  const text = buildReport();
+  if (text !== lastReport) { lastReport = text; $("reportText").textContent = text; }
+  // No share sheet on a desktop browser; Copy is always there.
+  $("shareBtn").classList.toggle("hidden", !navigator.share);
+}
+
+let reportNoteTimer = null;
+function sayAboutReport(msg) {
+  $("reportNote").textContent = msg;
+  clearTimeout(reportNoteTimer);
+  reportNoteTimer = setTimeout(() => { $("reportNote").textContent = ""; }, 5000);
+}
+
+/** The iOS share sheet, which is how a phone gets this into Notes or Messages. */
+async function shareReport() {
+  const text = buildReport();
+  if (!text) return;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Steak cook report", text });
+      return;
+    } catch (e) {
+      // Dismissing the sheet is not a failure and must not be treated as one.
+      if (e && e.name === "AbortError") return;
+    }
+  }
+  copyReport();
+}
+
+async function copyReport() {
+  const text = buildReport();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    sayAboutReport("Copied.");
+    return;
+  } catch (e) { /* no clipboard permission, or an insecure context */ }
+  // Fall back to putting the report under the cursor: one tap on the system
+  // Copy callout finishes it, which is better than a dead button.
+  try {
+    const sel = window.getSelection(), r = document.createRange();
+    r.selectNodeContents($("reportText"));
+    sel.removeAllRanges(); sel.addRange(r);
+    sayAboutReport("Selected — use Copy.");
+  } catch (e) {
+    sayAboutReport("Select the report above and copy it.");
+  }
+}
+
 /* ---------- chart ---------- */
 function drawChart() {
   const cv = $("chart");
@@ -1808,14 +2113,23 @@ function drawChart() {
   const ovenNow = zero ? (Date.now() - zero) / 60000 : 0;
   const curOff = cur() ? offOf(cur()) : 0;
 
+  // A steak that is out is history: it is drawn as far as its pull and no
+  // further.  Its plan is the one it had at the moment it came out, so letting
+  // it set the horizon would stretch the axis to a finish that is never going
+  // to happen -- and its curve would go on climbing across a chart of a dinner
+  // that is over.
+  const endOf = s => s.finishedAt
+    ? offOf(s) + (s.finishedAt - s.startedAt) / 60000 : null;
+
   let tMax = 60;
   if (shown.length) {
     // Far enough out for the last steak to finish, not just the selected one.
-    const horizons = shown.map(s => {
+    const horizons = shown.filter(s => !s.finishedAt).map(s => {
       const p = fits.get(s.id).plan;
       return (offOf(s) + (Number.isFinite(p.hit[2]) ? p.hit[2] : p.next)) * 1.12;
     });
-    tMax = Math.max(ovenNow + 6, ...horizons, 20);
+    const ends = shown.filter(s => s.finishedAt).map(s => endOf(s) * 1.06);
+    tMax = Math.max(...(horizons.length ? [ovenNow + 6] : []), ...horizons, ...ends, 20);
   } else if (state.readings.length) {
     tMax = Math.max(20, state.readings[state.readings.length - 1].t * 1.6);
   }
@@ -1846,7 +2160,7 @@ function drawChart() {
     // reads its starting temperature for every minute before it went in and
     // draws a flat run pinned to the left edge -- a steak that is not in the
     // oven, sitting at a temperature it never had there.
-    const span = Math.max(tMax - off, 0);
+    const span = Math.max((st.finishedAt ? Math.min(endOf(st), tMax) : tMax) - off, 0);
     for (let i = 0; i <= K; i++) {
       const tt = off + span * i / K;
       const p = pcts(draws.map(th => modelTemp(th, tt - off)), own ? [0.05, 0.5, 0.95] : [0.5]);
@@ -1915,14 +2229,17 @@ function drawChart() {
   g.beginPath(); g.moveTo(padL, Y(target) + .5); g.lineTo(w - padR, Y(target) + .5); g.stroke();
   g.setLineDash([]);
 
-  // next-action marker
-  if (plan) {
+  // next-action marker -- for a steak still in the oven.  The plan a steak had
+  // when it came out is not an appointment any more.
+  if (plan && cur() && !cur().finishedAt) {
     const tn = Math.min(curOff + plan.next, tMax);
     g.strokeStyle = plan.action === "coast" ? css.getPropertyValue("--good").trim() : ember;
     g.globalAlpha = .5; g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(X(tn), padT); g.lineTo(X(tn), h - padB); g.stroke();
     g.globalAlpha = 1;
-    // "now" marker, on the oven's clock
+  }
+  // "now" marker, on the oven's clock, while there is still something in it
+  if (activeSteaks().length) {
     const t = Math.min(ovenNow, tMax);
     g.strokeStyle = ink3; g.globalAlpha = .35; g.lineWidth = 1;
     g.beginPath(); g.moveTo(X(t), padT); g.lineTo(X(t), h - padB); g.stroke();
@@ -2069,6 +2386,22 @@ $("fanToggle").addEventListener("click", e => {
 // for ever -- and with no starting-temperature box to put them back in, since
 // those are hidden for a steak that has started, the next dinner could not be
 // started at all.
+/**
+ * Point the readouts back at a steak that is still in the oven, from the card
+ * of one that is out.  The trip is what the chef is waiting on, so go to the
+ * steak that is driving it rather than to whichever happens to be first.
+ */
+function backToTheCook() {
+  const o = nextOpening();
+  const on = activeSteaks();
+  const nxt = (o && on.find(s => steakTimes(s) && steakTimes(s).dueAt === o.openAt)) || on[0];
+  if (!nxt) return;
+  state.current = nxt.id;
+  lastListKeys = null;
+  recompute(); save(); render();
+  showVerdict();
+}
+
 function startAnother() {
   for (const st of state.steaks) {
     st.startedAt = null;
@@ -2184,12 +2517,18 @@ $("extraSteaks").addEventListener("click", e => {
   recompute(); save(); render();
 });
 
-// Tapping a row points the readouts, the chart band and the dock at that steak.
+// Tapping a row points the readouts, the chart band and the readings table at
+// that steak -- including one that is already on the board.  A steak's history
+// is the reason to keep the list: refusing the tap once it was out meant its
+// readings, its curve and its numbers vanished the moment it came out, and
+// nothing but a new cook could ever bring them back.  The dock is not part of
+// that: it belongs to the oven, and logTarget() keeps it pointed at something
+// that is actually in there.
 $("steakList").addEventListener("click", e => {
   const row = e.target.closest(".srow");
   if (!row) return;
   const st = steakById(row.dataset.s);
-  if (!st || st.finishedAt) return;
+  if (!st) return;
   state.current = st.id;
   lastListKeys = null;   // force the row skeleton to rebuild
   recompute(); save(); render();
@@ -2275,11 +2614,28 @@ function passState() {
   return { running, outstanding, target, done: running.length - outstanding.length };
 }
 
+/**
+ * The steak a reading typed right now belongs to.
+ *
+ * The sweep's, when a trip is under way; otherwise the selected steak -- unless
+ * the readouts are pointed at one that is already out, which they may be, since
+ * a finished steak can be selected to look back at what it did.  A reading can
+ * only be about something still in the oven.
+ */
+function logTarget() {
+  const pass = passState();
+  if (pass && pass.target) return pass.target;
+  const s = cur();
+  if (s && s.startedAt && !s.finishedAt) return s;
+  return activeSteaks()[0] || null;
+}
+
 $("logBtn").addEventListener("click", () => {
   // One trip is one sweep: put the reading on the steak in hand, then move to
   // the next one still unprobed so the chef never has to pick from a list.
-  const pass = passState();
-  if (pass && pass.target && pass.target.id !== state.current) state.current = pass.target.id;
+  const tgt = logTarget();
+  if (!tgt) return;
+  if (tgt.id !== state.current) state.current = tgt.id;
   const val = parseFloat($("readTemp").value);
   const bad = readingProblem(val, state.ovenC);
   // Leave the typed value in the box: it is a digit away from being right, and
@@ -2316,6 +2672,9 @@ $("log").addEventListener("click", e => {
   dockNote = "";
   recompute(); rescheduleCheck(cur()); save(); render();
 });
+
+$("shareBtn").addEventListener("click", shareReport);
+$("copyBtn").addEventListener("click", copyReport);
 
 $("resetBtn").addEventListener("click", startAnother);
 

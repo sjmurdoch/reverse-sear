@@ -677,9 +677,11 @@ module app {
 
   // Tapping a row points the readouts, the chart band and the dock at that
   // steak.  The handler refuses only a steak that is already out.
+  // Tapping a row in the list.  A steak that is out can be selected too -- that
+  // is how its history is read back -- so the alarm and the trip have to hold
+  // with the readouts pointed at a steak that is on a board.
   action selectSteak(i: int): bool = all {
     present.contains(i),
-    steaks.get(i).finishedAt == NONE,
     current' = i,
     alarmFired' = ringingIn(steaks, clock),
     clock' = clock, steaks' = steaks, present' = present, ovenC' = ovenC,
